@@ -1,9 +1,10 @@
 # ============================================================================
-# app.py - WERSJA Z PROSTYM ZARZÄDZANIEM (Dodaj / Edytuj / UsuÅ„)
+# app.py - PEŁNA EDYCJA PLANU (Edytuj, Usuń, Dodaj do zestawu)
 # ============================================================================
 
 import streamlit as st
 from datetime import datetime
+import copy
 import os
 
 from database import (
@@ -49,13 +50,17 @@ st.markdown(
 init_db()
 
 # ----------------------------------------------------------------------------
-# 2. NAWIGACJA (SESSION STATE)
+# 2. NAWIGACJA I STAN APLIKACJI (Session State)
 # ----------------------------------------------------------------------------
 if "page" not in st.session_state:
     st.session_state.page = "menu"
 
-if "custom_exercises" not in st.session_state:
-    st.session_state.custom_exercises = []
+# Kopiujemy plan treningowy do pamięci sesji, aby można go było modyfikować w locie
+if "workout_days" not in st.session_state:
+    st.session_state.workout_days = copy.deepcopy(WORKOUT_DAYS)
+
+if "editing_ex_key" not in st.session_state:
+    st.session_state.editing_ex_key = None
 
 
 def go_to_menu():
@@ -66,8 +71,8 @@ def go_to_workout_day_selection():
     st.session_state.page = "select_day"
 
 
-def go_to_exercise_list(day_key):
-    st.session_state.current_day = day_key
+def go_to_exercise_list(day_data):
+    st.session_state.current_day_key = day_data["day_key"]
     st.session_state.page = "exercise_list"
 
 
@@ -108,103 +113,109 @@ elif st.session_state.page == "select_day":
 
     st.header("Wybierz dzień z planu:")
 
-    for day in WORKOUT_DAYS:
+    for day in st.session_state.workout_days:
         if st.button(day["label"], key=f"day_{day['day_key']}"):
             st.toast(f"🔥 Odpalamy plan: {day['title']}!", icon="💪")
             go_to_exercise_list(day)
             st.rerun()
 
 
-# --- EKRAN 2: WYBÓR ĆWICZENIA Z DANEGO DNIA + ZARZĄDZANIE ---
+# --- EKRAN 2: LISTA ĆWICZEŃ W DANYM ZESTAWIE + EDYCJA / USUWANIE / DODAWANIE ---
 elif st.session_state.page == "exercise_list":
     if st.button("⬅️ Wróć do wyboru dnia", key="back_to_select_day"):
+        st.session_state.editing_ex_key = None
         go_to_workout_day_selection()
         st.rerun()
 
-    current_day = st.session_state.current_day
-    st.subheader(f"Zestaw: {current_day['title']}")
+    # Znajdź aktualny dzień na podstawie zapisanego klucza
+    current_day = next((d for d in st.session_state.workout_days if d["day_key"] == st.session_state.current_day_key),
+                       None)
 
-    # --- PANEL ZARZĄDZANIA WŁASNYMI ĆWICZENIAMI ---
-    with st.expander("🛠️ Zarządzaj własnymi ćwiczeniami (Dodaj / Edytuj / Usuń)"):
-        action = st.radio("Wybierz akcję:", ["➕ Dodaj nowe", "✏️ Edytuj nazwę", "❌ Usuń ćwiczenie"], horizontal=True,
-                          key="cex_action_radio")
+    if not current_day:
+        st.error("Nie znaleziono zestawu treningowego.")
+        if st.button("Wróć do menu"):
+            go_to_menu()
+            st.rerun()
+    else:
+        st.subheader(f"Zestaw: {current_day['title']}")
 
-        # 1. DODawanie
-        if action == "➕ Dodaj nowe":
-            new_name = st.text_input("Nazwa nowego ćwiczenia:", key="input_add_cex")
-            if st.button("💾 Zapisz nowe ćwiczenie", key="btn_confirm_add"):
-                if new_name.strip():
-                    new_key = f"custom_{datetime.now().timestamp()}"
-                    st.session_state.custom_exercises.append({
+        # --- PANEL DODAWANIA NOWEGO ĆWICZENIA DO TEGO ZESTAWU ---
+        with st.expander("➕ Dodaj nowe ćwiczenie do tego zestawu"):
+            new_ex_name = st.text_input("Nazwa ćwiczenia:", key="input_new_ex_name")
+            if st.button("💾 Zapisz i dodaj do planu", key="btn_add_to_day"):
+                if new_ex_name.strip():
+                    new_key = f"ex_{datetime.now().timestamp()}"
+                    current_day["exercises"].append({
                         "key": new_key,
-                        "name": new_name.strip(),
+                        "name": new_ex_name.strip(),
                         "image": "",
-                        "note": "Własne ćwiczenie niestandardowe"
+                        "note": "Ćwiczenie dodane przez użytkownika"
                     })
-                    st.toast("Dodano ćwiczenie!", icon="✅")
+                    st.toast("Dodano nowe ćwiczenie do zestawu!", icon="✅")
                     st.rerun()
                 else:
-                    st.warning("Wpisz nazwę.")
+                    st.warning("Nazwa nie może być pusta.")
 
-        # 2. EDYCJA
-        elif action == "✏️ Edytuj nazwę":
-            if not st.session_state.custom_exercises:
-                st.info("Brak własnych ćwiczeń do edycji.")
-            else:
-                cex_names = {cex['name']: cex for cex in st.session_state.custom_exercises}
-                selected_to_edit = st.selectbox("Wybierz ćwiczenie do edycji:", list(cex_names.keys()),
-                                                key="select_edit_cex")
-                target = cex_names[selected_to_edit]
+        st.markdown("---")
+        st.markdown("### Ćwiczenia w tym zestawie:")
+        st.caption("Kliknij ▶ aby ćwiczyć, albo użyj przycisków obok, aby edytować/usunąć.")
 
-                updated_name = st.text_input("Nowa nazwa:", value=target['name'], key="input_edit_cex_name")
-                if st.button("💾 Zaktualizuj nazwę", key="btn_confirm_edit"):
-                    if updated_name.strip():
-                        target['name'] = updated_name.strip()
-                        st.toast("Zaktualizowano nazwę!", icon="💾")
+        # Wyświetlanie listy ćwiczeń z opcjami wyboru, edycji i usuwania
+        for idx, ex in enumerate(current_day["exercises"]):
+            col_btn, col_edit, col_del = st.columns([4, 1, 1])
+
+            # Przycisk wejścia do ćwiczenia
+            if col_btn.button(f"▶ {ex['name']}", key=f"go_ex_{ex['key']}"):
+                st.toast(f"🎯 Wybrałeś: {ex['name']}", icon="🏋️‍♂️")
+                go_to_exercise(ex)
+                st.rerun()
+
+            # Przycisk edycji (zmieniania nazwy)
+            if col_edit.button("✏️", key=f"edit_trigger_{ex['key']}"):
+                st.session_state.editing_ex_key = ex['key']
+                st.rerun()
+
+            # Przycisk usuwania z planu
+            if col_del.button("❌", key=f"delete_ex_{ex['key']}"):
+                current_day["exercises"].pop(idx)
+                if st.session_state.editing_ex_key == ex['key']:
+                    st.session_state.editing_ex_key = None
+                st.toast("Usunięto ćwiczenie z planu", icon="🗑️")
+                st.rerun()
+
+        # Jeśli wybrano edycję konkretnego ćwiczenia, pokaż mały formularz pod spodem
+        if st.session_state.editing_ex_key:
+            target_key = st.session_state.editing_ex_key
+            target_ex = next((x for x in current_day["exercises"] if x['key'] == target_key), None)
+
+            if target_ex:
+                st.markdown("---")
+                st.info(f"Edytujesz nazwę dla: **{target_ex['name']}**")
+                new_edited_name = st.text_input("Nowa nazwa ćwiczenia:", value=target_ex['name'],
+                                                key=f"input_edit_val_{target_key}")
+
+                col_save_ed, col_cancel_ed = st.columns(2)
+                if col_save_ed.button("💾 Zapisz zmianę", key=f"save_edit_btn_{target_key}"):
+                    if new_edited_name.strip():
+                        target_ex['name'] = new_edited_name.strip()
+                        st.session_state.editing_ex_key = None
+                        st.toast("Zaktualizowano nazwę ćwiczenia!", icon="💾")
                         st.rerun()
                     else:
                         st.warning("Nazwa nie może być pusta.")
-
-        # 3. USUWANIE
-        elif action == "❌ Usuń ćwiczenie":
-            if not st.session_state.custom_exercises:
-                st.info("Brak własnych ćwiczeń do usunięcia.")
-            else:
-                cex_names_del = {cex['name']: cex for cex in st.session_state.custom_exercises}
-                selected_to_del = st.selectbox("Wybierz ćwiczenie do usunięcia:", list(cex_names_del.keys()),
-                                               key="select_del_cex")
-
-                if st.button("🗑️ Usuń trwale", type="primary", key="btn_confirm_del"):
-                    target_to_remove = cex_names_del[selected_to_del]
-                    st.session_state.custom_exercises = [x for x in st.session_state.custom_exercises if
-                                                         x['key'] != target_to_remove['key']]
-                    st.toast("Usunięto ćwiczenie!", icon="🗑️")
+                if col_cancel_ed.button("Anuluj", key=f"cancel_edit_btn_{target_key}"):
+                    st.session_state.editing_ex_key = None
                     st.rerun()
-
-    st.markdown("---")
-    st.markdown("### Ćwiczenia z planu:")
-
-    # Wyświetlanie domyślnych ćwiczeń z konfiguracji
-    for ex in current_day["exercises"]:
-        if st.button(f"▶ {ex['name']}", key=f"ex_{ex['key']}"):
-            st.toast(f"🎯 Wybrałeś: {ex['name']}", icon="🏋️‍♂️")
-            go_to_exercise(ex)
-            st.rerun()
-
-    # Wyświetlanie własnych, niestandardowych ćwiczeń
-    if st.session_state.custom_exercises:
-        st.markdown("### Twoje własne ćwiczenia:")
-        for cex in st.session_state.custom_exercises:
-            if st.button(f"▶ ⭐ {cex['name']}", key=f"ex_custom_{cex['key']}"):
-                st.toast(f"🎯 Wybrałeś: {cex['name']}", icon="🏋️‍♂️")
-                go_to_exercise(cex)
-                st.rerun()
 
 
 # --- EKRAN 3: AKTYWNE ĆWICZENIE ---
 elif st.session_state.page == "active_exercise":
     if st.button("⬅️ Wróć do listy ćwiczeń", key="back_to_exercise_list"):
-        go_to_exercise_list(st.session_state.current_day)
+        # Wracamy do zestawu, z którego przeszliśmy
+        current_day_data = next(
+            (d for d in st.session_state.workout_days if d["day_key"] == st.session_state.current_day_key),
+            WORKOUT_DAYS[0])
+        go_to_exercise_list(current_day_data)
         st.rerun()
 
     ex = st.session_state.current_exercise
@@ -261,7 +272,10 @@ elif st.session_state.page == "active_exercise":
         st.rerun()
 
     if st.button("💾 Zapisz ten wynik", type="primary", key="save_exercise_btn"):
-        save_exercise_sets(TODAY, st.session_state.current_day["day_key"], ex_name, sets_data)
+        current_day_data = next(
+            (d for d in st.session_state.workout_days if d["day_key"] == st.session_state.current_day_key),
+            WORKOUT_DAYS[0])
+        save_exercise_sets(TODAY, current_day_data["day_key"], ex_name, sets_data)
         st.toast("🔥 Zapisane! Pompa rośnie!", icon="💪")
         st.balloons()
         st.rerun()
