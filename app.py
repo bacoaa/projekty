@@ -1,5 +1,5 @@
 # ============================================================================
-# app.py - PRZYCISK TRYBU EDYCJI + KŁÓDKI I HASŁO "admin" Dla BAZOWYCH ĆWICZEŃ
+# app.py - EDYCJA W PRAWYM GÓRNYM ROGU + GLOBALNE HASŁO "admin"
 # ============================================================================
 
 import streamlit as st
@@ -57,25 +57,25 @@ if "workout_days" not in st.session_state:
     initial_days = copy.deepcopy(WORKOUT_DAYS)
     for d in initial_days:
         d["is_default"] = True
-        # Oznaczamy bazowe ćwiczenia w tych planach jako zablokowane
         for ex in d["exercises"]:
             ex["is_default"] = True
     st.session_state.workout_days = initial_days
 
+# Stany edycji i globalnego odblokowania hasłem
 if "edit_mode_plans" not in st.session_state:
     st.session_state.edit_mode_plans = False
 
 if "edit_mode_ex" not in st.session_state:
     st.session_state.edit_mode_ex = False
 
+if "is_admin_unlocked" not in st.session_state:
+    st.session_state.is_admin_unlocked = False
+
 if "editing_plan_key" not in st.session_state:
     st.session_state.editing_plan_key = None
 
 if "editing_ex_key" not in st.session_state:
     st.session_state.editing_ex_key = None
-
-if "auth_error" not in st.session_state:
-    st.session_state.auth_error = False
 
 
 def go_to_menu():
@@ -120,72 +120,88 @@ if st.session_state.page == "menu":
         st.rerun()
 
 
-# --- EKRAN 1: WYBÓR PLANU TRENINGOWEGO + PRZYCISK TRYBU EDYCJI ---
+# --- EKRAN 1: WYBÓR PLANU TRENINGOWEGO + EDYCJA W PRAWYM GÓRNYM ROGU ---
 elif st.session_state.page == "select_day":
-    if st.button("⬅️ Wróć do Menu", key="back_to_menu_from_select"):
+    # Układ górny: Powrót po lewej, przycisk edycji w prawym górnym rogu
+    col_top_back, col_top_edit = st.columns([2, 1])
+
+    if col_top_back.button("⬅️ Wróć do Menu", key="back_to_menu_from_select"):
         st.session_state.editing_plan_key = None
         go_to_menu()
         st.rerun()
 
-    st.header("Wybierz dzień z planu:")
-
-    # Przycisk sterujący trybem edycji planów
-    btn_label = "🔓 Wyłącz tryb edycji planów" if st.session_state.edit_mode_plans else "🔒 Włącz tryb edycji planów"
-    if st.button(btn_label, key="toggle_btn_plans"):
+    edit_btn_label = "🔓 Edycja ON" if st.session_state.edit_mode_plans else "🔒 Edycja"
+    if col_top_edit.button(edit_btn_label, key="toggle_btn_plans"):
         st.session_state.edit_mode_plans = not st.session_state.edit_mode_plans
         st.session_state.editing_plan_key = None
+        if not st.session_state.edit_mode_plans:
+            st.session_state.is_admin_unlocked = False  # Blokujemy po wyłączeniu edycji
         st.rerun()
 
-    # Panel dodawania nowego planu (widoczny tylko w trybie edycji)
-    if st.session_state.edit_mode_plans:
-        with st.expander("➕ Dodaj nowy plan treningowy"):
-            new_plan_name = st.text_input("Nazwa planu:", key="input_new_plan_name")
-            if st.button("💾 Stwórz plan", key="btn_create_plan"):
-                if new_plan_name.strip():
-                    new_key = f"plan_{datetime.now().timestamp()}"
-                    st.session_state.workout_days.append({
-                        "day_key": new_key,
-                        "title": new_plan_name.strip(),
-                        "label": f"✨ {new_plan_name.strip()}",
-                        "exercises": [],
-                        "is_default": False
-                    })
-                    st.toast("Utworzono nowy plan!", icon="✅")
-                    st.rerun()
-                else:
-                    st.warning("Nazwa planu nie może być pusta.")
-        st.markdown("---")
+    st.header("Wybierz dzień z planu:")
 
-    # Wyświetlanie planów
-    for idx, day in enumerate(st.session_state.workout_days):
-        is_locked = day.get("is_default", False)
-
-        if not st.session_state.edit_mode_plans:
-            if st.button(day["label"], key=f"day_clean_{day['day_key']}"):
-                st.toast(f"🔥 Odpalamy plan: {day['title']}!", icon="💪")
-                go_to_exercise_list(day)
+    # Jeśli włączono tryb edycji, a admin nie jest odblokowany -> pokaż pole na hasło
+    if st.session_state.edit_mode_plans and not st.session_state.is_admin_unlocked:
+        st.info("🔐 Tryb edycji wymaga podania hasła administratora.")
+        admin_password = st.text_input("Wpisz hasło:", type="password", key="admin_pass_plans")
+        if st.button("Odblokuj", key="unlock_plans_btn"):
+            if admin_password == "admin":
+                st.session_state.is_admin_unlocked = True
+                st.toast("Odblokowano tryb administratora!", icon="🔓")
                 st.rerun()
-        else:
-            if is_locked:
-                col_l1, col_l2 = st.columns([5, 1])
-                if col_l1.button(f"🔒 {day['label']}", key=f"day_locked_{day['day_key']}"):
-                    go_to_exercise_list(day)
-                    st.rerun()
-                col_l2.caption("Zablokowany")
             else:
-                col_b, col_e, col_d = st.columns([3, 1, 1])
-                if col_b.button(f"▶ {day['label']}", key=f"day_custom_{day['day_key']}"):
+                st.error("Błędne hasło! Wpisz: admin")
+
+    # Jeśli odblokowano lub wyłączono edycję bazowych (własne plany zawsze dostępne w edycji)
+    if not st.session_state.edit_mode_plans or st.session_state.is_admin_unlocked:
+        if st.session_state.edit_mode_plans:
+            with st.expander("➕ Dodaj nowy plan treningowy"):
+                new_plan_name = st.text_input("Nazwa planu:", key="input_new_plan_name")
+                if st.button("💾 Stwórz plan", key="btn_create_plan"):
+                    if new_plan_name.strip():
+                        new_key = f"plan_{datetime.now().timestamp()}"
+                        st.session_state.workout_days.append({
+                            "day_key": new_key,
+                            "title": new_plan_name.strip(),
+                            "label": f"✨ {new_plan_name.strip()}",
+                            "exercises": [],
+                            "is_default": False
+                        })
+                        st.toast("Utworzono nowy plan!", icon="✅")
+                        st.rerun()
+                    else:
+                        st.warning("Nazwa planu nie może być pusta.")
+            st.markdown("---")
+
+        for idx, day in enumerate(st.session_state.workout_days):
+            is_locked = day.get("is_default", False)
+
+            if not st.session_state.edit_mode_plans:
+                if st.button(day["label"], key=f"day_clean_{day['day_key']}"):
+                    st.toast(f"🔥 Odpalamy plan: {day['title']}!", icon="💪")
                     go_to_exercise_list(day)
                     st.rerun()
-                if col_e.button("✏️", key=f"edit_plan_{day['day_key']}"):
-                    st.session_state.editing_plan_key = day['day_key']
-                    st.rerun()
-                if col_d.button("❌", key=f"del_plan_{day['day_key']}"):
-                    st.session_state.workout_days.pop(idx)
-                    if st.session_state.editing_plan_key == day['day_key']:
-                        st.session_state.editing_plan_key = None
-                    st.toast("Usunięto plan", icon="🗑️")
-                    st.rerun()
+            else:
+                if is_locked:
+                    col_l1, col_l2 = st.columns([5, 1])
+                    if col_l1.button(f"🔒 {day['label']}", key=f"day_locked_{day['day_key']}"):
+                        go_to_exercise_list(day)
+                        st.rerun()
+                    col_l2.caption("Baza")
+                else:
+                    col_b, col_e, col_d = st.columns([3, 1, 1])
+                    if col_b.button(f"▶ {day['label']}", key=f"day_custom_{day['day_key']}"):
+                        go_to_exercise_list(day)
+                        st.rerun()
+                    if col_e.button("✏️", key=f"edit_plan_{day['day_key']}"):
+                        st.session_state.editing_plan_key = day['day_key']
+                        st.rerun()
+                    if col_d.button("❌", key=f"del_plan_{day['day_key']}"):
+                        st.session_state.workout_days.pop(idx)
+                        if st.session_state.editing_plan_key == day['day_key']:
+                            st.session_state.editing_plan_key = None
+                        st.toast("Usunięto plan", icon="🗑️")
+                        st.rerun()
 
     # Formularz edycji nazwy planu niestandardowego
     if st.session_state.editing_plan_key:
@@ -210,12 +226,21 @@ elif st.session_state.page == "select_day":
                 st.rerun()
 
 
-# --- EKRAN 2: LISTA ĆWICZEŃ W DANYM PLANIE + ZABEZPIECZENIE HASŁEM ---
+# --- EKRAN 2: LISTA ĆWICZEŃ W PLANIE + EDYCJA W PRAWYM GÓRNYM ROGU ---
 elif st.session_state.page == "exercise_list":
-    if st.button("⬅️ Wróć do wyboru planu", key="back_to_select_day"):
+    col_top_back_ex, col_top_edit_ex = st.columns([2, 1])
+
+    if col_top_back_ex.button("⬅️ Wróć do planów", key="back_to_select_day"):
         st.session_state.editing_ex_key = None
-        st.session_state.auth_error = False
         go_to_workout_day_selection()
+        st.rerun()
+
+    edit_btn_label_ex = "🔓 Edycja ON" if st.session_state.edit_mode_ex else "🔒 Edycja"
+    if col_top_edit_ex.button(edit_btn_label_ex, key="toggle_btn_ex"):
+        st.session_state.edit_mode_ex = not st.session_state.edit_mode_ex
+        st.session_state.editing_ex_key = None
+        if not st.session_state.edit_mode_ex:
+            st.session_state.is_admin_unlocked = False
         st.rerun()
 
     current_day = next((d for d in st.session_state.workout_days if d["day_key"] == st.session_state.current_day_key),
@@ -229,115 +254,93 @@ elif st.session_state.page == "exercise_list":
     else:
         st.subheader(f"Plan: {current_day['title']}")
 
-        # Przycisk sterujący trybem edycji ćwiczeń
-        btn_label_ex = "🔓 Wyłącz tryb edycji ćwiczeń" if st.session_state.edit_mode_ex else "🔒 Włącz tryb edycji ćwiczeń"
-        if st.button(btn_label_ex, key="toggle_btn_ex"):
-            st.session_state.edit_mode_ex = not st.session_state.edit_mode_ex
-            st.session_state.editing_ex_key = None
-            st.session_state.auth_error = False
-            st.rerun()
-
-        # Panel dodawania ćwiczenia (widoczny w trybie edycji)
-        if st.session_state.edit_mode_ex:
-            with st.expander("➕ Dodaj nowe ćwiczenie do tego planu"):
-                new_ex_name = st.text_input("Nazwa ćwiczenia:", key="input_new_ex_name")
-                if st.button("💾 Dodaj ćwiczenie", key="btn_add_to_day"):
-                    if new_ex_name.strip():
-                        new_key = f"ex_{datetime.now().timestamp()}"
-                        current_day["exercises"].append({
-                            "key": new_key,
-                            "name": new_ex_name.strip(),
-                            "image": "",
-                            "note": "Ćwiczenie niestandardowe",
-                            "is_default": False
-                        })
-                        st.toast("Dodano ćwiczenie!", icon="✅")
-                        st.rerun()
-                    else:
-                        st.warning("Nazwa nie może być pusta.")
-            st.markdown("---")
-
-        st.markdown("### Ćwiczenia:")
-
-        if not current_day["exercises"]:
-            st.info("Brak ćwiczeń w tym planie.")
-        else:
-            for idx, ex in enumerate(current_day["exercises"]):
-                is_ex_locked = ex.get("is_default", False)
-
-                if not st.session_state.edit_mode_ex:
-                    if st.button(f"▶ {ex['name']}", key=f"go_ex_clean_{ex['key']}"):
-                        st.toast(f"🎯 Wybrałeś: {ex['name']}", icon="🏋️‍♂️")
-                        go_to_exercise(ex)
-                        st.rerun()
+        # Zabezpieczenie hasłem w trybie edycji ćwiczeń
+        if st.session_state.edit_mode_ex and not st.session_state.is_admin_unlocked:
+            st.info("🔐 Tryb edycji ćwiczeń wymaga podania hasła administratora.")
+            admin_password_ex = st.text_input("Wpisz hasło:", type="password", key="admin_pass_ex")
+            if st.button("Odblokuj edycję", key="unlock_ex_btn"):
+                if admin_password_ex == "admin":
+                    st.session_state.is_admin_unlocked = True
+                    st.toast("Odblokowano tryb administratora!", icon="🔓")
+                    st.rerun()
                 else:
-                    if is_ex_locked:
-                        col_btn, col_lock = st.columns([5, 1])
-                        if col_btn.button(f"🔒 {ex['name']}", key=f"go_ex_locked_{ex['key']}"):
-                            go_to_exercise(ex)
-                            st.rerun()
-                        col_lock.markdown("🔒")
-                    else:
-                        col_btn, col_edit, col_del = st.columns([3, 1, 1])
-                        if col_btn.button(f"▶ {ex['name']}", key=f"go_ex_{ex['key']}"):
-                            go_to_exercise(ex)
-                            st.rerun()
-                        if col_edit.button("✏️", key=f"edit_ex_trigger_{ex['key']}"):
-                            st.session_state.editing_ex_key = ex['key']
-                            st.session_state.auth_error = False
-                            st.rerun()
-                        if col_del.button("❌", key=f"del_ex_{ex['key']}"):
-                            current_day["exercises"].pop(idx)
-                            if st.session_state.editing_ex_key == ex['key']:
-                                st.session_state.editing_ex_key = None
-                            st.toast("Usunięto ćwiczenie", icon="🗑️")
-                            st.rerun()
+                    st.error("Błędne hasło! Wpisz: admin")
 
-        # Formularz edycji nazwy ćwiczenia z zabezpieczeniem hasłem dla bazowych
+        if not st.session_state.edit_mode_ex or st.session_state.is_admin_unlocked:
+            if st.session_state.edit_mode_ex:
+                with st.expander("➕ Dodaj nowe ćwiczenie do tego planu"):
+                    new_ex_name = st.text_input("Nazwa ćwiczenia:", key="input_new_ex_name")
+                    if st.button("💾 Dodaj ćwiczenie", key="btn_add_to_day"):
+                        if new_ex_name.strip():
+                            new_key = f"ex_{datetime.now().timestamp()}"
+                            current_day["exercises"].append({
+                                "key": new_key,
+                                "name": new_ex_name.strip(),
+                                "image": "",
+                                "note": "Ćwiczenie niestandardowe",
+                                "is_default": False
+                            })
+                            st.toast("Dodano ćwiczenie!", icon="✅")
+                            st.rerun()
+                        else:
+                            st.warning("Nazwa nie może być pusta.")
+                st.markdown("---")
+
+            st.markdown("### Ćwiczenia:")
+
+            if not current_day["exercises"]:
+                st.info("Brak ćwiczeń w tym planie.")
+            else:
+                for idx, ex in enumerate(current_day["exercises"]):
+                    is_ex_locked = ex.get("is_default", False)
+
+                    if not st.session_state.edit_mode_ex:
+                        if st.button(f"▶ {ex['name']}", key=f"go_ex_clean_{ex['key']}"):
+                            st.toast(f"🎯 Wybrałeś: {ex['name']}", icon="🏋️‍♂️")
+                            go_to_exercise(ex)
+                            st.rerun()
+                    else:
+                        if is_ex_locked and not st.session_state.is_admin_unlocked:
+                            col_btn, col_lock = st.columns([5, 1])
+                            if col_btn.button(f"🔒 {ex['name']}", key=f"go_ex_locked_{ex['key']}"):
+                                go_to_exercise(ex)
+                                st.rerun()
+                            col_lock.markdown("🔒")
+                        else:
+                            col_btn, col_edit, col_del = st.columns([3, 1, 1])
+                            if col_btn.button(f"▶ {ex['name']}", key=f"go_ex_{ex['key']}"):
+                                go_to_exercise(ex)
+                                st.rerun()
+                            if col_edit.button("✏️", key=f"edit_ex_trigger_{ex['key']}"):
+                                st.session_state.editing_ex_key = ex['key']
+                                st.rerun()
+                            if col_del.button("❌", key=f"del_ex_{ex['key']}"):
+                                current_day["exercises"].pop(idx)
+                                if st.session_state.editing_ex_key == ex['key']:
+                                    st.session_state.editing_ex_key = None
+                                st.toast("Usunięto ćwiczenie", icon="🗑️")
+                                st.rerun()
+
+        # Formularz edycji nazwy ćwiczenia
         if st.session_state.editing_ex_key:
             target_ex = next((x for x in current_day["exercises"] if x['key'] == st.session_state.editing_ex_key), None)
             if target_ex:
                 st.markdown("---")
                 st.info(f"Edytujesz: {target_ex['name']}")
-
-                # Jeśli ćwiczenie jest bazowe, wymagamy hasła "admin"
-                if target_ex.get("is_default", False):
-                    st.warning("⚠️ To podstawowe ćwiczenie jest zablokowane. Podaj hasło, aby je edytować.")
-                    admin_pass = st.text_input("Hasło administratora:", type="password", key="input_admin_pass")
-
-                    if st.session_state.auth_error:
-                        st.error("Błędne hasło! Wpisz: admin")
-
-                    col_se, col_ce = st.columns(2)
-                    if col_se.button("🔓 Odblokuj i edytuj", key="btn_unlock_ex"):
-                        if admin_pass == "admin":
-                            st.session_state.auth_error = False
-                            target_ex["is_default"] = False  # Odkiwamy po podaniu hasła
-                            st.toast("Odblokowano ćwiczenie!", icon="🔓")
-                            st.rerun()
-                        else:
-                            st.session_state.auth_error = True
-                            st.rerun()
-                    if col_ce.button("Anuluj", key="btn_cancel_ex_auth"):
+                new_ex_edited_name = st.text_input("Nowa nazwa ćwiczenia:", value=target_ex['name'],
+                                                   key="input_edit_ex_val")
+                col_se, col_ce = st.columns(2)
+                if col_se.button("💾 Zapisz", key="btn_save_ex_edit"):
+                    if new_ex_edited_name.strip():
+                        target_ex['name'] = new_ex_edited_name.strip()
                         st.session_state.editing_ex_key = None
-                        st.session_state.auth_error = False
+                        st.toast("Zaktualizowano nazwę!", icon="💾")
                         st.rerun()
-                else:
-                    # Normalna edycja dla odblokowanych / własnych ćwiczeń
-                    new_ex_edited_name = st.text_input("Nowa nazwa ćwiczenia:", value=target_ex['name'],
-                                                       key="input_edit_ex_val")
-                    col_se, col_ce = st.columns(2)
-                    if col_se.button("💾 Zapisz", key="btn_save_ex_edit"):
-                        if new_ex_edited_name.strip():
-                            target_ex['name'] = new_ex_edited_name.strip()
-                            st.session_state.editing_ex_key = None
-                            st.toast("Zaktualizowano nazwę!", icon="💾")
-                            st.rerun()
-                        else:
-                            st.warning("Nazwa nie może być pusta.")
-                    if col_ce.button("Anuluj", key="btn_cancel_ex_edit"):
-                        st.session_state.editing_ex_key = None
-                        st.rerun()
+                    else:
+                        st.warning("Nazwa nie może być pusta.")
+                if col_ce.button("Anuluj", key="btn_cancel_ex_edit"):
+                    st.session_state.editing_ex_key = None
+                    st.rerun()
 
 
 # --- EKRAN 3: AKTYWNE ĆWICZENIE ---
