@@ -1,5 +1,5 @@
 # ============================================================================
-# app.py - WERSJA FINALNA Z ANIMACJAMI KLIKNIĘĆ I STARTU
+# app.py - WERSJA FINALNA Z WŁASNYMI ĆWICZENIAMI W LOCIE
 # ============================================================================
 
 import streamlit as st
@@ -86,12 +86,12 @@ if st.session_state.page == "menu":
     st.title("💪 Twój Dziennik")
     st.write("Wybierz, co robimy dzisiaj:")
 
-    if st.button("🔥 NOWY TRENING", type="primary"):
+    if st.button("🔥 NOWY TRENING", type="primary", key="menu_new_workout"):
         st.toast("🚀 Zaczynamy nową sesję!", icon="⚡")
         go_to_workout_day_selection()
         st.rerun()
 
-    if st.button("📚 HISTORIA I WYKRESY"):
+    if st.button("📚 HISTORIA I WYKRESY", key="menu_history"):
         st.toast("📊 Otwieram archiwum wyników", icon="📈")
         go_to_history()
         st.rerun()
@@ -99,7 +99,7 @@ if st.session_state.page == "menu":
 
 # --- EKRAN 1: WYBÓR DNIA TRENINGOWEGO ---
 elif st.session_state.page == "select_day":
-    if st.button("⬅️ Wróć do Menu"):
+    if st.button("⬅️ Wróć do Menu", key="back_to_menu_from_select"):
         go_to_menu()
         st.rerun()
 
@@ -114,12 +114,32 @@ elif st.session_state.page == "select_day":
 
 # --- EKRAN 2: WYBÓR ĆWICZENIA Z DANEGO DNIA ---
 elif st.session_state.page == "exercise_list":
-    if st.button("⬅️ Wróć do wyboru dnia"):
+    if st.button("⬅️ Wróć do wyboru dnia", key="back_to_select_day"):
         go_to_workout_day_selection()
         st.rerun()
 
     current_day = st.session_state.current_day
     st.subheader(f"Zestaw: {current_day['title']}")
+
+    # --- NOWOŚĆ: Pole do wpisania własnego ćwiczenia w locie ---
+    with st.expander("➕ Dodaj własne ćwiczenie spoza planu"):
+        custom_ex_name = st.text_input("Nazwa nowego ćwiczenia:")
+        if st.button("Dodaj i przejdź do wpisywania", key="add_custom_ex_btn"):
+            if custom_ex_name.strip():
+                # Tworzymy strukturalny słownik dla nowego ćwiczenia w locie
+                custom_ex_data = {
+                    "key": f"custom_{custom_ex_name.lower().replace(' ', '_')}",
+                    "name": custom_ex_name.strip(),
+                    "image": "",  # brak zdjęcia dla ćwiczeń niestandardowych
+                    "note": "Ćwiczenie dodane niestandardowo w trakcie treningu."
+                }
+                go_to_exercise(custom_ex_data)
+                st.rerun()
+            else:
+                st.warning("Wpisz nazwę ćwiczenia!")
+
+    st.markdown("---")
+    st.markdown("### Wybierz z planu:")
 
     for ex in current_day["exercises"]:
         if st.button(f"▶ {ex['name']}", key=f"ex_{ex['key']}"):
@@ -130,7 +150,7 @@ elif st.session_state.page == "exercise_list":
 
 # --- EKRAN 3: AKTYWNE ĆWICZENIE ---
 elif st.session_state.page == "active_exercise":
-    if st.button("⬅️ Wróć do listy ćwiczeń"):
+    if st.button("⬅️ Wróć do listy ćwiczeń", key="back_to_exercise_list"):
         go_to_exercise_list(st.session_state.current_day)
         st.rerun()
 
@@ -139,12 +159,10 @@ elif st.session_state.page == "active_exercise":
 
     st.title(ex_name)
 
-    # Obsługa zdjęć i GIF-ów
+    # Obsługa zdjęć i GIF-ów (jeśli ścieżka istnieje)
     image_path = ex.get("image", "")
-    if os.path.exists(image_path):
+    if image_path and os.path.exists(image_path):
         st.image(image_path, use_container_width=True)
-    else:
-        st.caption(f"Brak pliku: {image_path}")
 
     if ex.get("note"):
         st.info(ex["note"])
@@ -188,12 +206,12 @@ elif st.session_state.page == "active_exercise":
             rep_max = weight * (1 + reps / 30)
             st.caption(f"Szacowany max (1RM): **{rep_max:.1f} kg**")
 
-    if st.button("➕ Dodaj serię"):
+    if st.button("➕ Dodaj serię", key="add_set_btn"):
         st.session_state[sets_count_key] += 1
         st.rerun()
 
-    # Zapis z satysfakcjonującymi animacjami (balony + toast)
-    if st.button("💾 Zapisz ten wynik", type="primary"):
+    # Zapis z animacjami
+    if st.button("💾 Zapisz ten wynik", type="primary", key="save_exercise_btn"):
         save_exercise_sets(TODAY, st.session_state.current_day["day_key"], ex_name, sets_data)
         st.toast("🔥 Zapisane! Pompa rośnie!", icon="💪")
         st.balloons()
@@ -202,7 +220,7 @@ elif st.session_state.page == "active_exercise":
 
 # --- EKRAN 4: HISTORIA I WYKRESY PROGRESU ---
 elif st.session_state.page == "history":
-    if st.button("⬅️ Wróć do Menu"):
+    if st.button("⬅️ Wróć do Menu", key="back_to_menu_from_history"):
         go_to_menu()
         st.rerun()
 
