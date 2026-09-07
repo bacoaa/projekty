@@ -1,5 +1,5 @@
 # ============================================================================
-# app.py - WERSJA FINALNA Z ZARZĄDZANIEM (Dodawanie, Edycja, Usuwanie)
+# app.py - WERSJA Z PROSTYM ZARZÄDZANIEM (Dodaj / Edytuj / UsuÅ„)
 # ============================================================================
 
 import streamlit as st
@@ -56,9 +56,6 @@ if "page" not in st.session_state:
 
 if "custom_exercises" not in st.session_state:
     st.session_state.custom_exercises = []
-
-if "editing_cex_key" not in st.session_state:
-    st.session_state.editing_cex_key = None
 
 
 def go_to_menu():
@@ -127,58 +124,62 @@ elif st.session_state.page == "exercise_list":
     current_day = st.session_state.current_day
     st.subheader(f"Zestaw: {current_day['title']}")
 
-    # --- PANEL ZARZĄDZANIA WŁASNYMI ĆWICZENIAMI (Dodaj, Edytuj, Usuń) ---
-    with st.expander("🛠️ Zarządzaj / Dodaj własne ćwiczenia"):
-        new_name = st.text_input("Nazwa nowego ćwiczenia:", key="new_custom_name_input")
-        if st.button("➕ Dodaj nowe ćwiczenie", key="add_custom_exec_btn"):
-            if new_name.strip():
-                new_key = f"custom_{datetime.now().timestamp()}"
-                st.session_state.custom_exercises.append({
-                    "key": new_key,
-                    "name": new_name.strip(),
-                    "image": "",
-                    "note": "Własne ćwiczenie dodane w locie"
-                })
-                st.toast("Dodano nowe ćwiczenie!", icon="✅")
-                st.rerun()
+    # --- PANEL ZARZĄDZANIA WŁASNYMI ĆWICZENIAMI ---
+    with st.expander("🛠️ Zarządzaj własnymi ćwiczeniami (Dodaj / Edytuj / Usuń)"):
+        action = st.radio("Wybierz akcję:", ["➕ Dodaj nowe", "✏️ Edytuj nazwę", "❌ Usuń ćwiczenie"], horizontal=True,
+                          key="cex_action_radio")
+
+        # 1. DODawanie
+        if action == "➕ Dodaj nowe":
+            new_name = st.text_input("Nazwa nowego ćwiczenia:", key="input_add_cex")
+            if st.button("💾 Zapisz nowe ćwiczenie", key="btn_confirm_add"):
+                if new_name.strip():
+                    new_key = f"custom_{datetime.now().timestamp()}"
+                    st.session_state.custom_exercises.append({
+                        "key": new_key,
+                        "name": new_name.strip(),
+                        "image": "",
+                        "note": "Własne ćwiczenie niestandardowe"
+                    })
+                    st.toast("Dodano ćwiczenie!", icon="✅")
+                    st.rerun()
+                else:
+                    st.warning("Wpisz nazwę.")
+
+        # 2. EDYCJA
+        elif action == "✏️ Edytuj nazwę":
+            if not st.session_state.custom_exercises:
+                st.info("Brak własnych ćwiczeń do edycji.")
             else:
-                st.warning("Wpisz nazwę ćwiczenia.")
+                cex_names = {cex['name']: cex for cex in st.session_state.custom_exercises}
+                selected_to_edit = st.selectbox("Wybierz ćwiczenie do edycji:", list(cex_names.keys()),
+                                                key="select_edit_cex")
+                target = cex_names[selected_to_edit]
 
-        if st.session_state.custom_exercises:
-            st.markdown("---")
-            st.markdown("**Twoje niestandardowe ćwiczenia:**")
-            for idx, cex in enumerate(st.session_state.custom_exercises):
-                col_info, col_edit, col_del = st.columns([3, 1, 1])
-                col_info.text(cex['name'])
-
-                if col_edit.button("✏️", key=f"edit_cex_{cex['key']}"):
-                    st.session_state.editing_cex_key = cex['key']
-                    st.rerun()
-
-                if col_del.button("❌", key=f"del_cex_{cex['key']}"):
-                    st.session_state.custom_exercises.pop(idx)
-                    if st.session_state.editing_cex_key == cex['key']:
-                        st.session_state.editing_cex_key = None
-                    st.toast("Usunięto ćwiczenie", icon="🗑️")
-                    st.rerun()
-
-            # Formularz edycji wybranego ćwiczenia
-            if st.session_state.editing_cex_key:
-                edit_key = st.session_state.editing_cex_key
-                target_cex = next((x for x in st.session_state.custom_exercises if x['key'] == edit_key), None)
-                if target_cex:
-                    st.markdown("---")
-                    st.markdown(f"**Edytujesz:** {target_cex['name']}")
-                    edited_name = st.text_input("Zmień nazwę:", value=target_cex['name'], key=f"edit_input_{edit_key}")
-                    col_save, col_cancel = st.columns(2)
-                    if col_save.button("💾 Zapisz zmiany", key=f"save_edit_{edit_key}"):
-                        target_cex['name'] = edited_name.strip()
-                        st.session_state.editing_cex_key = None
+                updated_name = st.text_input("Nowa nazwa:", value=target['name'], key="input_edit_cex_name")
+                if st.button("💾 Zaktualizuj nazwę", key="btn_confirm_edit"):
+                    if updated_name.strip():
+                        target['name'] = updated_name.strip()
                         st.toast("Zaktualizowano nazwę!", icon="💾")
                         st.rerun()
-                    if col_cancel.button("Anuluj", key=f"cancel_edit_{edit_key}"):
-                        st.session_state.editing_cex_key = None
-                        st.rerun()
+                    else:
+                        st.warning("Nazwa nie może być pusta.")
+
+        # 3. USUWANIE
+        elif action == "❌ Usuń ćwiczenie":
+            if not st.session_state.custom_exercises:
+                st.info("Brak własnych ćwiczeń do usunięcia.")
+            else:
+                cex_names_del = {cex['name']: cex for cex in st.session_state.custom_exercises}
+                selected_to_del = st.selectbox("Wybierz ćwiczenie do usunięcia:", list(cex_names_del.keys()),
+                                               key="select_del_cex")
+
+                if st.button("🗑️ Usuń trwale", type="primary", key="btn_confirm_del"):
+                    target_to_remove = cex_names_del[selected_to_del]
+                    st.session_state.custom_exercises = [x for x in st.session_state.custom_exercises if
+                                                         x['key'] != target_to_remove['key']]
+                    st.toast("Usunięto ćwiczenie!", icon="🗑️")
+                    st.rerun()
 
     st.markdown("---")
     st.markdown("### Ćwiczenia z planu:")
@@ -192,7 +193,7 @@ elif st.session_state.page == "exercise_list":
 
     # Wyświetlanie własnych, niestandardowych ćwiczeń
     if st.session_state.custom_exercises:
-        st.markdown("### Własne ćwiczenia:")
+        st.markdown("### Twoje własne ćwiczenia:")
         for cex in st.session_state.custom_exercises:
             if st.button(f"▶ ⭐ {cex['name']}", key=f"ex_custom_{cex['key']}"):
                 st.toast(f"🎯 Wybrałeś: {cex['name']}", icon="🏋️‍♂️")
