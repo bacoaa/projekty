@@ -1,5 +1,5 @@
 # ============================================================================
-# app.py - ZARZĄDZANIE PLANAMI (Blokada domyślnych z kłódką + Własne plany)
+# app.py - CZYSTY WIDOK + PRZEŁĄCZNIK TRYBU EDYCJI (Kłódki i Opcje na żądanie)
 # ============================================================================
 
 import streamlit as st
@@ -54,7 +54,6 @@ if "page" not in st.session_state:
     st.session_state.page = "menu"
 
 if "workout_days" not in st.session_state:
-    # Kopiujemy bazowe plany i oznaczamy domyślne flagą is_default=True
     initial_days = copy.deepcopy(WORKOUT_DAYS)
     for d in initial_days:
         d["is_default"] = True
@@ -62,6 +61,9 @@ if "workout_days" not in st.session_state:
 
 if "editing_plan_key" not in st.session_state:
     st.session_state.editing_plan_key = None
+
+if "editing_ex_key" not in st.session_state:
+    st.session_state.editing_ex_key = None
 
 
 def go_to_menu():
@@ -106,62 +108,70 @@ if st.session_state.page == "menu":
         st.rerun()
 
 
-# --- EKRAN 1: WYBÓR DNIA / PLANU TRENINGOWEGO + DODAWANIE I ZARZĄDZANIE ---
+# --- EKRAN 1: WYBÓR PLANU TRENINGOWEGO + TRYB EDYCJI ---
 elif st.session_state.page == "select_day":
     if st.button("⬅️ Wróć do Menu", key="back_to_menu_from_select"):
+        st.session_state.editing_plan_key = None
         go_to_menu()
         st.rerun()
 
     st.header("Wybierz dzień z planu:")
 
-    # --- PANEL DODAWANIA NOWEGO PLANU ---
-    with st.expander("➕ Dodaj kolejny plan treningowy"):
-        new_plan_name = st.text_input("Nazwa nowego planu (np. 'GÓRA', 'BRZUCH'):", key="input_new_plan_name")
-        if st.button("💾 Stwórz nowy plan", key="btn_create_plan"):
-            if new_plan_name.strip():
-                new_key = f"plan_{datetime.now().timestamp()}"
-                st.session_state.workout_days.append({
-                    "day_key": new_key,
-                    "title": new_plan_name.strip(),
-                    "label": f"✨ {new_plan_name.strip()}",
-                    "exercises": [],
-                    "is_default": False
-                })
-                st.toast("Utworzono nowy plan!", icon="✅")
-                st.rerun()
-            else:
-                st.warning("Nazwa planu nie może być pusta.")
+    # Przełącznik trybu edycji planów
+    edit_mode_plans = st.toggle("⚙️ Włącz tryb edycji / zarządzania planami", key="toggle_edit_plans")
 
-    st.markdown("---")
+    # Panel dodawania nowego planu (widoczny tylko w trybie edycji)
+    if edit_mode_plans:
+        with st.expander("➕ Dodaj nowy plan treningowy"):
+            new_plan_name = st.text_input("Nazwa planu:", key="input_new_plan_name")
+            if st.button("💾 Stwórz plan", key="btn_create_plan"):
+                if new_plan_name.strip():
+                    new_key = f"plan_{datetime.now().timestamp()}"
+                    st.session_state.workout_days.append({
+                        "day_key": new_key,
+                        "title": new_plan_name.strip(),
+                        "label": f"✨ {new_plan_name.strip()}",
+                        "exercises": [],
+                        "is_default": False
+                    })
+                    st.toast("Utworzono nowy plan!", icon="✅")
+                    st.rerun()
+                else:
+                    st.warning("Nazwa planu nie może być pusta.")
+        st.markdown("---")
 
-    # Wyświetlanie listy planów (domyślne z kłódką 🔒, własne z opcją edycji/usuwania)
+    # Wyświetlanie planów
     for idx, day in enumerate(st.session_state.workout_days):
         is_locked = day.get("is_default", False)
 
-        if is_locked:
-            # Plan domyślny z kłódką - tylko przycisk wyboru
-            if st.button(f"🔒 {day['label']}", key=f"day_locked_{day['day_key']}"):
+        if not edit_mode_plans:
+            # Tryb normalny - tylko czyste przyciski kafelkowe
+            if st.button(day["label"], key=f"day_clean_{day['day_key']}"):
                 st.toast(f"🔥 Odpalamy plan: {day['title']}!", icon="💪")
                 go_to_exercise_list(day)
                 st.rerun()
         else:
-            # Plan własny - przycisk wyboru + opcja edycji nazwy i usunięcia
-            col_b, col_e, col_d = st.columns([3, 1, 1])
-            if col_b.button(f"▶ {day['label']}", key=f"day_custom_{day['day_key']}"):
-                st.toast(f"🔥 Odpalamy plan: {day['title']}!", icon="💪")
-                go_to_exercise_list(day)
-                st.rerun()
-
-            if col_e.button("✏️", key=f"edit_plan_{day['day_key']}"):
-                st.session_state.editing_plan_key = day['day_key']
-                st.rerun()
-
-            if col_d.button("❌", key=f"del_plan_{day['day_key']}"):
-                st.session_state.workout_days.pop(idx)
-                if st.session_state.editing_plan_key == day['day_key']:
-                    st.session_state.editing_plan_key = None
-                st.toast("Usunięto plan", icon="🗑️")
-                st.rerun()
+            # Tryb edycji - z kłódkami dla domyślnych i opcjami usuwania/edycji dla własnych
+            if is_locked:
+                col_l1, col_l2 = st.columns([5, 1])
+                if col_l1.button(f"🔒 {day['label']}", key=f"day_locked_{day['day_key']}"):
+                    go_to_exercise_list(day)
+                    st.rerun()
+                col_l2.caption("Zablokowany")
+            else:
+                col_b, col_e, col_d = st.columns([3, 1, 1])
+                if col_b.button(f"▶ {day['label']}", key=f"day_custom_{day['day_key']}"):
+                    go_to_exercise_list(day)
+                    st.rerun()
+                if col_e.button("✏️", key=f"edit_plan_{day['day_key']}"):
+                    st.session_state.editing_plan_key = day['day_key']
+                    st.rerun()
+                if col_d.button("❌", key=f"del_plan_{day['day_key']}"):
+                    st.session_state.workout_days.pop(idx)
+                    if st.session_state.editing_plan_key == day['day_key']:
+                        st.session_state.editing_plan_key = None
+                    st.toast("Usunięto plan", icon="🗑️")
+                    st.rerun()
 
     # Formularz edycji nazwy planu niestandardowego
     if st.session_state.editing_plan_key:
@@ -170,14 +180,14 @@ elif st.session_state.page == "select_day":
         if target_plan:
             st.markdown("---")
             st.info(f"Edytujesz plan: {target_plan['title']}")
-            new_p_name = st.text_input("Nowa nazwa planu:", value=target_plan['title'], key="input_edit_plan_val")
+            new_p_name = st.text_input("Nowa nazwa:", value=target_plan['title'], key="input_edit_plan_val")
             col_sp, col_cp = st.columns(2)
-            if col_sp.button("💾 Zapisz nazwę", key="btn_save_plan_edit"):
+            if col_sp.button("💾 Zapisz", key="btn_save_plan_edit"):
                 if new_p_name.strip():
                     target_plan['title'] = new_p_name.strip()
                     target_plan['label'] = f"✨ {new_p_name.strip()}"
                     st.session_state.editing_plan_key = None
-                    st.toast("Zaktualizowano nazwę planu!", icon="💾")
+                    st.toast("Zaktualizowano nazwę!", icon="💾")
                     st.rerun()
                 else:
                     st.warning("Nazwa nie może być pusta.")
@@ -186,10 +196,10 @@ elif st.session_state.page == "select_day":
                 st.rerun()
 
 
-# --- EKRAN 2: LISTA ĆWICZEŃ W DANYM PLANIE ---
+# --- EKRAN 2: LISTA ĆWICZEŃ W DANYM PLANIE + TRYB EDYCJI ---
 elif st.session_state.page == "exercise_list":
     if st.button("⬅️ Wróć do wyboru planu", key="back_to_select_day"):
-        st.session_state.editing_plan_key = None
+        st.session_state.editing_ex_key = None
         go_to_workout_day_selection()
         st.rerun()
 
@@ -204,38 +214,75 @@ elif st.session_state.page == "exercise_list":
     else:
         st.subheader(f"Plan: {current_day['title']}")
 
-        # Panel dodawania ćwiczenia do tego planu
-        with st.expander("➕ Dodaj ćwiczenie do tego planu"):
-            new_ex_name = st.text_input("Nazwa ćwiczenia:", key="input_new_ex_name")
-            if st.button("💾 Dodaj ćwiczenie", key="btn_add_to_day"):
-                if new_ex_name.strip():
-                    new_key = f"ex_{datetime.now().timestamp()}"
-                    current_day["exercises"].append({
-                        "key": new_key,
-                        "name": new_ex_name.strip(),
-                        "image": "",
-                        "note": "Ćwiczenie niestandardowe"
-                    })
-                    st.toast("Dodano ćwiczenie!", icon="✅")
-                    st.rerun()
-                else:
-                    st.warning("Nazwa nie może być pusta.")
+        # Przełącznik trybu edycji ćwiczeń
+        edit_mode_exercises = st.toggle("⚙️ Włącz tryb edycji / dodawania ćwiczeń", key="toggle_edit_ex")
 
-        st.markdown("---")
-        st.markdown("### Ćwiczenia w planie:")
+        # Panel dodawania ćwiczenia (widoczny w trybie edycji)
+        if edit_mode_exercises:
+            with st.expander("➕ Dodaj nowe ćwiczenie do tego planu"):
+                new_ex_name = st.text_input("Nazwa ćwiczenia:", key="input_new_ex_name")
+                if st.button("💾 Dodaj ćwiczenie", key="btn_add_to_day"):
+                    if new_ex_name.strip():
+                        new_key = f"ex_{datetime.now().timestamp()}"
+                        current_day["exercises"].append({
+                            "key": new_key,
+                            "name": new_ex_name.strip(),
+                            "image": "",
+                            "note": "Ćwiczenie niestandardowe"
+                        })
+                        st.toast("Dodano ćwiczenie!", icon="✅")
+                        st.rerun()
+                    else:
+                        st.warning("Nazwa nie może być pusta.")
+            st.markdown("---")
+
+        st.markdown("### Ćwiczenia:")
 
         if not current_day["exercises"]:
-            st.info("Ten plan jest jeszcze pusty. Dodaj pierwsze ćwiczenie powyżej!")
+            st.info("Brak ćwiczeń w tym planie.")
         else:
             for idx, ex in enumerate(current_day["exercises"]):
-                col_btn, col_del = st.columns([5, 1])
-                if col_btn.button(f"▶ {ex['name']}", key=f"go_ex_{ex['key']}"):
-                    st.toast(f"🎯 Wybrałeś: {ex['name']}", icon="🏋️‍♂️")
-                    go_to_exercise(ex)
-                    st.rerun()
-                if col_del.button("❌", key=f"del_ex_{ex['key']}"):
-                    current_day["exercises"].pop(idx)
-                    st.toast("Usunięto ćwiczenie z planu", icon="🗑️")
+                if not edit_mode_exercises:
+                    # Czysty przycisk ćwiczenia
+                    if st.button(f"▶ {ex['name']}", key=f"go_ex_clean_{ex['key']}"):
+                        st.toast(f"🎯 Wybrałeś: {ex['name']}", icon="🏋️‍♂️")
+                        go_to_exercise(ex)
+                        st.rerun()
+                else:
+                    # Tryb edycji z opcją edycji nazwy i usuwania
+                    col_btn, col_edit, col_del = st.columns([3, 1, 1])
+                    if col_btn.button(f"▶ {ex['name']}", key=f"go_ex_{ex['key']}"):
+                        go_to_exercise(ex)
+                        st.rerun()
+                    if col_edit.button("✏️", key=f"edit_ex_trigger_{ex['key']}"):
+                        st.session_state.editing_ex_key = ex['key']
+                        st.rerun()
+                    if col_del.button("❌", key=f"del_ex_{ex['key']}"):
+                        current_day["exercises"].pop(idx)
+                        if st.session_state.editing_ex_key == ex['key']:
+                            st.session_state.editing_ex_key = None
+                        st.toast("Usunięto ćwiczenie", icon="🗑️")
+                        st.rerun()
+
+        # Formularz edycji nazwy ćwiczenia
+        if st.session_state.editing_ex_key:
+            target_ex = next((x for x in current_day["exercises"] if x['key'] == st.session_state.editing_ex_key), None)
+            if target_ex:
+                st.markdown("---")
+                st.info(f"Edytujesz: {target_ex['name']}")
+                new_ex_edited_name = st.text_input("Nowa nazwa ćwiczenia:", value=target_ex['name'],
+                                                   key="input_edit_ex_val")
+                col_se, col_ce = st.columns(2)
+                if col_se.button("💾 Zapisz", key="btn_save_ex_edit"):
+                    if new_ex_edited_name.strip():
+                        target_ex['name'] = new_ex_edited_name.strip()
+                        st.session_state.editing_ex_key = None
+                        st.toast("Zaktualizowano nazwę!", icon="💾")
+                        st.rerun()
+                    else:
+                        st.warning("Nazwa nie może być pusta.")
+                if col_ce.button("Anuluj", key="btn_cancel_ex_edit"):
+                    st.session_state.editing_ex_key = None
                     st.rerun()
 
 
