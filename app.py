@@ -106,8 +106,7 @@ elif st.session_state.page == "select_day":
     st.header("Wybierz dzień z planu:")
 
     for day in WORKOUT_DAYS:
-        if st.button(day["label"]):
-            # Animacja toast przy wyborze dnia treningowego
+        if st.button(day["label"], key=f"day_{day['day_key']}"):
             st.toast(f"🔥 Odpalamy plan: {day['title']}!", icon="💪")
             go_to_exercise_list(day)
             st.rerun()
@@ -123,8 +122,7 @@ elif st.session_state.page == "exercise_list":
     st.subheader(f"Zestaw: {current_day['title']}")
 
     for ex in current_day["exercises"]:
-        if st.button(f"▶ {ex['name']}"):
-            # Animacja toast przy wyborze ćwiczenia
+        if st.button(f"▶ {ex['name']}", key=f"ex_{ex['key']}"):
             st.toast(f"🎯 Wybrałeś: {ex['name']}", icon="🏋️‍♂️")
             go_to_exercise(ex)
             st.rerun()
