@@ -14,6 +14,11 @@
 # Importujemy wbudowaną w Pythona bibliotekę do obsługi SQLite.
 import sqlite3
 
+# Importujemy "json" - potrzebny do zamiany Twoich niestandardowych planów
+# treningowych (lista/słowniki Pythona) na zwykły tekst, który da się
+# zapisać w jednej kolumnie SQLite, i z powrotem.
+import json
+
 # Importujemy narzędzia do pracy z datami i czasem (potrzebne np. do liczenia
 # "3 tygodnie wstecz").
 from datetime import datetime, timedelta
@@ -89,6 +94,63 @@ def init_db():
         # "commit()" zatwierdza zmiany w bazie - bez tego CREATE TABLE
         # mogłoby się "nie zapisać" na stałe.
         conn.commit()
+
+        # ---------------------------------------------------------------
+        # NOWOŚĆ: druga, malutka tabela "app_state" - to prosty magazyn
+        # "klucz -> wartość" na WSZYSTKO, co wcześniej żyło TYLKO w
+        # st.session_state (czyli znikało po każdym przeładowaniu strony,
+        # np. po powrocie z Spotify). Będziemy tu trzymać m.in. Twoje
+        # własnoręcznie dodane plany treningowe i ćwiczenia.
+        # ---------------------------------------------------------------
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_state (
+                key TEXT PRIMARY KEY,   -- nazwa zapisywanej rzeczy, np. "workout_days"
+                value TEXT NOT NULL     -- jej zawartość, zapisana jako tekst JSON
+            )
+            """
+        )
+        conn.commit()
+
+
+# ----------------------------------------------------------------------------
+# TRWAŁY MAGAZYN "KLUCZ -> WARTOŚĆ" (żeby dane przeżyły przeładowanie strony)
+# ----------------------------------------------------------------------------
+def save_app_state(key, value):
+    """
+    Zapisuje DOWOLNĄ strukturę danych Pythona (listę, słownik...) pod
+    podaną nazwą (key), na trwałe, w bazie SQLite.
+
+    "json.dumps(value, ensure_ascii=False)" zamienia np. listę słowników
+    na jeden długi tekst w formacie JSON (ensure_ascii=False, żeby polskie
+    znaki typu "ą", "ć" zapisywały się czytelnie, a nie jako "\\u0105").
+    """
+    with get_connection() as conn:
+        tekst_json = json.dumps(value, ensure_ascii=False)
+        # "INSERT OR REPLACE" wstawia nowy wiersz, A JEŚLI wiersz o takim
+        # samym "key" już istnieje - po prostu go nadpisuje. Dzięki temu
+        # nie musimy osobno sprawdzać "czy już istnieje" przed zapisem.
+        conn.execute(
+            "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
+            (key, tekst_json),
+        )
+        conn.commit()
+
+
+def load_app_state(key, default=None):
+    """
+    Odczytuje wcześniej zapisaną strukturę danych spod podanej nazwy (key).
+    Jeśli nic tam jeszcze nie ma (np. pierwsze uruchomienie appki), zwraca
+    wartość "default" zamiast wywalać błąd.
+    """
+    with get_connection() as conn:
+        wiersz = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?", (key,)
+        ).fetchone()
+        if wiersz is None:
+            return default
+        # json.loads zamienia zapisany tekst z powrotem na listę/słownik Pythona.
+        return json.loads(wiersz["value"])
 
 
 # ----------------------------------------------------------------------------

@@ -9,7 +9,8 @@ import os
 
 from database import (
     init_db, save_exercise_sets, get_history, get_today_sets,
-    get_all_sessions, get_exercises_for_session, get_sets_for_date, get_progress_data
+    get_all_sessions, get_exercises_for_session, get_sets_for_date, get_progress_data,
+    save_app_state, load_app_state,
 )
 from exercises_config import WORKOUT_DAYS, MAX_SETS
 
@@ -50,16 +51,95 @@ init_db()
 # ----------------------------------------------------------------------------
 # 2. NAWIGACJA I STAN APLIKACJI (Session State)
 # ----------------------------------------------------------------------------
+
+# --- 2a. PLANY TRENINGOWE: wczytujemy je z bazy danych, a NIE zawsze od
+#         zera. To naprawia najpoważniejszy błąd starej wersji: Twoje
+#         własnoręcznie dodane/edytowane plany i ćwiczenia żyły WYŁĄCZNIE
+#         w pamięci sesji (session_state) i znikały bezpowrotnie przy
+#         każdym przeładowaniu strony (np. po powrocie z innej aplikacji).
+#         Teraz: jeśli w bazie jest już zapisany komplet planów - używamy
+#         go. Jeśli nie (pierwsze uruchomienie appki w ogóle) - budujemy
+#         domyślny plan z exercises_config.py i OD RAZU zapisujemy go do
+#         bazy, żeby był tam na przyszłość.
+if "workout_days" not in st.session_state:
+    zapisane_plany = load_app_state("workout_days", default=None)
+
+    if zapisane_plany is not None:
+        # W bazie jest już komplet planów (domyślnych i/lub Twoich własnych)
+        # - używamy go dokładnie takiego, jaki ostatnio zostawiłeś.
+        st.session_state.workout_days = zapisane_plany
+    else:
+        # Baza jeszcze pusta - budujemy plan startowy z konfiguracji.
+        initial_days = copy.deepcopy(WORKOUT_DAYS)
+        for d in initial_days:
+            d["is_default"] = True
+            for ex in d["exercises"]:
+                ex["is_default"] = True
+        st.session_state.workout_days = initial_days
+        # Zapisujemy go od razu do bazy, żeby przy następnym uruchomieniu
+        # (nawet po awarii/restarcie appki) nie trzeba było zaczynać od zera.
+        save_app_state("workout_days", st.session_state.workout_days)
+
+
+def persist_workout_days():
+    """
+    Woła się PO KAŻDEJ zmianie planów/ćwiczeń (dodanie, edycja, usunięcie),
+    żeby ta zmiana natychmiast trafiła do bazy danych, a nie została tylko
+    w pamięci sesji. Bez tego wywołania Twoje zmiany znowu ginęłyby po
+    przeładowaniu strony.
+    """
+    save_app_state("workout_days", st.session_state.workout_days)
+
+
+# --- 2b. PRZYWRACANIE EKRANU PO PRZEŁADOWANIU STRONY -------------------------
+# Kiedy przeglądarka na telefonie "usypia" kartę (np. przełączasz się na
+# Spotify) i potem ją przeładowuje, Streamlit traci CAŁY session_state i
+# zaczyna nową sesję od zera - domyślnie appka wracała wtedy zawsze do
+# Menu Głównego, nawet jeśli byłeś w środku wpisywania serii.
+#
+# Rozwiązanie: oprócz session_state, zapisujemy "gdzie jesteśmy" TAKŻE w
+# adresie URL (tzw. "query params") - a URL, w przeciwieństwie do
+# session_state, PRZEŻYWA przeładowanie strony. Dzięki temu, jeśli
+# session_state jest świeże (czyli to naprawdę nowa sesja), próbujemy
+# odtworzyć poprzedni ekran na podstawie tego, co jest zapisane w URL.
 if "page" not in st.session_state:
+    zapisana_strona = st.query_params.get("page", "menu")
+    zapisany_dzien_klucz = st.query_params.get("day")
+    zapisane_cwiczenie_klucz = st.query_params.get("ex")
+
+    # Bezpieczna wartość domyślna - gdyby coś dalej nie pasowało.
     st.session_state.page = "menu"
 
-if "workout_days" not in st.session_state:
-    initial_days = copy.deepcopy(WORKOUT_DAYS)
-    for d in initial_days:
-        d["is_default"] = True
-        for ex in d["exercises"]:
-            ex["is_default"] = True
-    st.session_state.workout_days = initial_days
+    if zapisana_strona in ("select_day", "history"):
+        # Te dwa ekrany nie wymagają żadnych dodatkowych danych do odtworzenia.
+        st.session_state.page = zapisana_strona
+
+    elif zapisana_strona == "exercise_list" and zapisany_dzien_klucz:
+        # Szukamy w aktualnie wczytanych planach dnia o zapamiętanym kluczu.
+        dzien = next(
+            (d for d in st.session_state.workout_days if d["day_key"] == zapisany_dzien_klucz),
+            None,
+        )
+        if dzien:
+            st.session_state.current_day_key = zapisany_dzien_klucz
+            st.session_state.page = "exercise_list"
+
+    elif zapisana_strona == "active_exercise" and zapisany_dzien_klucz and zapisane_cwiczenie_klucz:
+        dzien = next(
+            (d for d in st.session_state.workout_days if d["day_key"] == zapisany_dzien_klucz),
+            None,
+        )
+        if dzien:
+            cwiczenie = next(
+                (e for e in dzien["exercises"] if e["key"] == zapisane_cwiczenie_klucz),
+                None,
+            )
+            if cwiczenie:
+                st.session_state.current_day_key = zapisany_dzien_klucz
+                st.session_state.current_exercise = cwiczenie
+                st.session_state.page = "active_exercise"
+    # W każdym innym przypadku (np. puste query params przy pierwszej
+    # wizycie) zostajemy przy bezpiecznej wartości domyślnej "menu".
 
 if "edit_mode_plans" not in st.session_state:
     st.session_state.edit_mode_plans = False
@@ -79,24 +159,42 @@ if "editing_ex_key" not in st.session_state:
 
 def go_to_menu():
     st.session_state.page = "menu"
+    # Czyścimy URL z parametrów - menu nie potrzebuje żadnego kontekstu.
+    st.query_params.clear()
 
 
 def go_to_workout_day_selection():
     st.session_state.page = "select_day"
+    st.query_params.clear()
+    st.query_params["page"] = "select_day"
 
 
 def go_to_exercise_list(day_data):
     st.session_state.current_day_key = day_data["day_key"]
     st.session_state.page = "exercise_list"
+    # Zapisujemy w URL, na jakim jesteśmy ekranie i którego dnia dotyczy -
+    # dzięki temu przeładowanie strony (np. po powrocie z innej appki)
+    # przywróci Cię DOKŁADNIE tutaj, a nie do Menu Głównego.
+    st.query_params.clear()
+    st.query_params["page"] = "exercise_list"
+    st.query_params["day"] = day_data["day_key"]
 
 
 def go_to_exercise(exercise_data):
     st.session_state.current_exercise = exercise_data
     st.session_state.page = "active_exercise"
+    # Tu dodatkowo zapisujemy KLUCZ konkretnego ćwiczenia, żeby po
+    # przeładowaniu appka wiedziała, które dokładnie ćwiczenie odtworzyć.
+    st.query_params.clear()
+    st.query_params["page"] = "active_exercise"
+    st.query_params["day"] = st.session_state.current_day_key
+    st.query_params["ex"] = exercise_data["key"]
 
 
 def go_to_history():
     st.session_state.page = "history"
+    st.query_params.clear()
+    st.query_params["page"] = "history"
 
 
 # ----------------------------------------------------------------------------
@@ -160,6 +258,7 @@ elif st.session_state.page == "select_day":
                             "exercises": [],
                             "is_default": False
                         })
+                        persist_workout_days()  # NOWOŚĆ: zapisujemy nowy plan na trwałe
                         st.rerun()
                     else:
                         st.warning("Nazwa planu nie może być pusta.")
@@ -191,6 +290,7 @@ elif st.session_state.page == "select_day":
                         st.session_state.workout_days.pop(idx)
                         if st.session_state.editing_plan_key == day['day_key']:
                             st.session_state.editing_plan_key = None
+                        persist_workout_days()  # NOWOŚĆ: zapisujemy usunięcie na trwałe
                         st.rerun()
 
     if st.session_state.editing_plan_key:
@@ -206,6 +306,7 @@ elif st.session_state.page == "select_day":
                     target_plan['title'] = new_p_name.strip()
                     target_plan['label'] = f"✨ {new_p_name.strip()}"
                     st.session_state.editing_plan_key = None
+                    persist_workout_days()  # NOWOŚĆ: zapisujemy zmianę nazwy na trwałe
                     st.rerun()
                 else:
                     st.warning("Nazwa nie może być pusta.")
@@ -266,6 +367,7 @@ elif st.session_state.page == "exercise_list":
                                 "note": "Ćwiczenie niestandardowe",
                                 "is_default": False
                             })
+                            persist_workout_days()  # NOWOŚĆ: zapisujemy nowe ćwiczenie na trwałe
                             st.rerun()
                         else:
                             st.warning("Nazwa nie może być pusta.")
@@ -302,6 +404,7 @@ elif st.session_state.page == "exercise_list":
                                 current_day["exercises"].pop(idx)
                                 if st.session_state.editing_ex_key == ex['key']:
                                     st.session_state.editing_ex_key = None
+                                persist_workout_days()  # NOWOŚĆ: zapisujemy usunięcie na trwałe
                                 st.rerun()
 
         if st.session_state.editing_ex_key:
@@ -316,6 +419,7 @@ elif st.session_state.page == "exercise_list":
                     if new_ex_edited_name.strip():
                         target_ex['name'] = new_ex_edited_name.strip()
                         st.session_state.editing_ex_key = None
+                        persist_workout_days()  # NOWOŚĆ: zapisujemy zmianę nazwy na trwałe
                         st.rerun()
                     else:
                         st.warning("Nazwa nie może być pusta.")
