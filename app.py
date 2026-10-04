@@ -7,15 +7,70 @@ from datetime import datetime
 import copy
 import os
 
+# streamlit.components.v1 pozwala wstawić WŁASNY kod HTML/JavaScript na
+# stronę. Używamy tego TYLKO do stopera odpoczynku - czysty Python/Streamlit
+# nie potrafi sam z siebie co sekundę odświeżać fragmentu ekranu bez pomocy
+# usera, a JavaScript w przeglądarce potrafi to zrobić płynnie.
+import streamlit.components.v1 as components
+
 from database import (
     init_db, save_exercise_sets, save_single_set, get_history, get_today_sets,
     get_all_sessions, get_exercises_for_session, get_sets_for_date, get_progress_data,
     save_app_state, load_app_state,
+    eksportuj_baze_jako_bajty, waliduj_i_przywroc_baze,
 )
 from exercises_config import WORKOUT_DAYS, MAX_SETS
 
 DEFAULT_SETS = 3
 TODAY = datetime.now().strftime("%Y-%m-%d")
+
+# Ile sekund ma domyślnie trwać stoper odpoczynku po zapisaniu serii.
+SEKUNDY_ODPOCZYNKU = 90
+
+
+def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
+    """
+    Rysuje wizualny, SAMO-ODLICZAJĄCY się stoper odpoczynku w czystym
+    JavaScript. "nonce" to liczba, którą zwiększamy przy KAŻDYM starcie
+    stopera - dzięki temu treść komponentu jest za każdym razem inna, więc
+    Streamlit tworzy go NA NOWO (a nie "dogrzewa" starego), czyli licznik
+    zawsze zaczyna odliczać OD PEŁNEGO czasu, a nie kontynuuje poprzedni.
+    """
+    kod_html = f"""
+    <div id="stoper-kontener-{nonce}" style="
+        text-align:center;
+        font-family:sans-serif;
+        font-size:2rem;
+        font-weight:700;
+        padding:0.9rem;
+        border-radius:14px;
+        background: linear-gradient(90deg, rgba(255,75,75,0.15), rgba(255,75,75,0.05));
+        color:#ff4b4b;
+        transition: all 0.4s ease;">
+        ⏱️ Odpoczynek: <span id="stoper-liczba-{nonce}">{sekundy_startowe}</span> s
+    </div>
+    <script>
+        let pozostaloSekund_{nonce} = {sekundy_startowe};
+        const elementLiczby_{nonce} = document.getElementById("stoper-liczba-{nonce}");
+        const elementKontenera_{nonce} = document.getElementById("stoper-kontener-{nonce}");
+
+        // setInterval() uruchamia podaną funkcję co 1000 milisekund (1 sekundę).
+        const idIntervalu_{nonce} = setInterval(function() {{
+            pozostaloSekund_{nonce} = pozostaloSekund_{nonce} - 1;
+
+            if (pozostaloSekund_{nonce} <= 0) {{
+                elementKontenera_{nonce}.innerHTML = "💪 GOTOWE! Wracaj do ćwiczenia!";
+                elementKontenera_{nonce}.style.background =
+                    "linear-gradient(90deg, rgba(46,204,113,0.2), rgba(46,204,113,0.05))";
+                elementKontenera_{nonce}.style.color = "#2ecc71";
+                clearInterval(idIntervalu_{nonce});
+            }} else {{
+                elementLiczby_{nonce}.innerText = pozostaloSekund_{nonce};
+            }}
+        }}, 1000);
+    </script>
+    """
+    components.html(kod_html, height=90)
 
 # ----------------------------------------------------------------------------
 # 1. KONFIGURACJA STRONY I STYLÓW CSS
@@ -49,7 +104,7 @@ st.markdown(
 init_db()
 
 # ----------------------------------------------------------------------------
-# 2. NAWIGACJA I STAN APLIKACJI(Session State)
+# 2. NAWIGACJA I STAN APLIKACJI (Session State)
 # ----------------------------------------------------------------------------
 
 # --- 2a. PLANY TRENINGOWE: wczytujemy je z bazy danych, a NIE zawsze od
@@ -144,6 +199,16 @@ if "page" not in st.session_state:
 if "edit_mode_plans" not in st.session_state:
     st.session_state.edit_mode_plans = False
 
+# --- NOWOŚĆ: stan wizualnego stopera odpoczynku ------------------------------
+# Czy stoper ma być w ogóle narysowany w tym przebiegu skryptu.
+if "stoper_widoczny" not in st.session_state:
+    st.session_state.stoper_widoczny = False
+
+# "nonce" zwiększamy za każdym razem, gdy user zapisze serię - wymusza to
+# narysowanie stopera OD NOWA (patrz komentarz przy pokaz_stoper_odpoczynku()).
+if "stoper_nonce" not in st.session_state:
+    st.session_state.stoper_nonce = 0
+
 if "edit_mode_ex" not in st.session_state:
     st.session_state.edit_mode_ex = False
 
@@ -213,6 +278,61 @@ if st.session_state.page == "menu":
     if st.button("📚 HISTORIA I WYKRESY", key="menu_history"):
         go_to_history()
         st.rerun()
+
+    # ------------------------------------------------------------------
+    # NOWOŚĆ: KOPIA ZAPASOWA BAZY DANYCH
+    # ------------------------------------------------------------------
+    # Streamlit Community Cloud NIE gwarantuje, że plik bazy danych
+    # przetrwa każdy restart appki - dlatego dajemy Ci prosty sposób na
+    # ręczne zabezpieczenie CAŁEJ historii treningów: pobranie jej jako
+    # jeden plik, i w razie czego - wgranie z powrotem.
+    # Używamy st.expander(), żeby ta sekcja była domyślnie ZWINIĘTA i nie
+    # rzucała się w oczy na co dzień.
+    with st.expander("⚙️ Kopia zapasowa danych"):
+        st.caption(
+            "Streamlit czasem resetuje zapisane dane przy aktualizacjach "
+            "appki. Pobieraj kopię zapasową raz na jakiś czas (np. co "
+            "tydzień), żeby nigdy nie stracić historii treningów."
+        )
+
+        # --- POBIERANIE KOPII ZAPASOWEJ -----------------------------------
+        # st.download_button potrzebuje gotowych BAJTÓW pliku - dostaje je
+        # z funkcji eksportuj_baze_jako_bajty() z database.py.
+        dane_do_pobrania = eksportuj_baze_jako_bajty()
+        st.download_button(
+            label="📥 Pobierz kopię zapasową",
+            data=dane_do_pobrania,
+            file_name=f"kopia_zapasowa_{TODAY}.db",
+            mime="application/octet-stream",
+            key="pobierz_kopie_btn",
+        )
+
+        st.markdown("---")
+
+        # --- PRZYWRACANIE Z KOPII ZAPASOWEJ --------------------------------
+        st.caption("Chcesz przywrócić wcześniej pobraną kopię? Wgraj ją tutaj:")
+        wgrany_plik = st.file_uploader(
+            "Wybierz plik kopii zapasowej (.db)",
+            type=["db"],
+            key="wgraj_kopie_uploader",
+            label_visibility="collapsed",
+        )
+        if wgrany_plik is not None:
+            # Pokazujemy czerwone ostrzeżenie PRZED wykonaniem akcji -
+            # przywrócenie kopii NADPISUJE całą obecną bazę danych.
+            st.warning(
+                "⚠️ To NADPISZE całą obecną bazę danych wgranym plikiem. "
+                "Tej operacji nie da się cofnąć."
+            )
+            if st.button("♻️ Tak, przywróć tę kopię zapasową", key="przywroc_kopie_btn"):
+                # "getvalue()" odczytuje zawartość przesłanego pliku jako
+                # surowe bajty - dokładnie to, czego oczekuje nasza funkcja
+                # waliduj_i_przywroc_baze() w database.py.
+                sukces, komunikat = waliduj_i_przywroc_baze(wgrany_plik.getvalue())
+                if sukces:
+                    st.success(komunikat)
+                else:
+                    st.error(komunikat)
 
 
 # --- EKRAN 1: WYBÓR PLANU TRENINGOWEGO + EDYCJA W PRAWYM GÓRNYM ROGU ---
@@ -493,27 +613,60 @@ elif st.session_state.page == "active_exercise":
             st.caption(f"Szacowany max (1RM): **{rep_max:.1f} kg**")
 
         # ------------------------------------------------------------------
-        # NOWOŚĆ: przycisk zapisu PRZY KAŻDEJ SERII Z OSOBNA.
-        # Kliknięcie od razu zapisuje TĘ JEDNĄ serię do bazy danych (funkcja
-        # save_single_set w database.py) - nie trzeba czekać do końca
-        # całego ćwiczenia. Dzięki temu, jeśli telefon przeładuje appkę
-        # zaraz po tym (np. wracasz z innej aplikacji), ta seria JUŻ jest
-        # bezpiecznie zapisana - przy ponownym wejściu na to ćwiczenie pole
-        # samo się wypełni zapisaną wartością, a licznik serii automatycznie
-        # pokaże tyle pól, ile już zapisałeś + będziesz mógł kliknąć
-        # "➕ Dodaj serię", żeby dopisać kolejną (np. 3.).
-        if st.button(f"💾 Zapisz serię {i}", key=f"save_set_{ex['key']}_{i}"):
+        # Dwa przyciski obok siebie: ZAPISZ i USUŃ tę konkretną serię.
+        # ------------------------------------------------------------------
+        col_zapisz, col_usun = st.columns(2)
+
+        # "💾 Zapisz" - zapisuje TĘ JEDNĄ serię do bazy danych od razu
+        # (funkcja save_single_set w database.py) - nie trzeba czekać do
+        # końca całego ćwiczenia. Dzięki temu, jeśli telefon przeładuje
+        # appkę zaraz po tym (np. wracasz z innej aplikacji), ta seria JUŻ
+        # jest bezpiecznie zapisana. Jeśli zmienisz wartości i klikniesz
+        # ponownie - to też jest sposób na EDYCJĘ już zapisanej serii,
+        # bo save_single_set nadpisuje poprzedni wpis tego samego numeru.
+        if col_zapisz.button(f"💾 Zapisz {i}", key=f"save_set_{ex['key']}_{i}"):
             zapisano = save_single_set(
                 TODAY, current_day_data["day_key"], ex_name, i, weight, reps
             )
             if zapisano:
                 st.toast(f"Zapisano serię {i}! 💪", icon="✅")
+                # Uruchamiamy (albo restartujemy, jeśli już trwał) stoper
+                # odpoczynku - patrz pokaz_stoper_odpoczynku() na górze pliku.
+                st.session_state.stoper_widoczny = True
+                st.session_state.stoper_nonce += 1
+                st.rerun()
             else:
                 st.warning("Wpisz ciężar lub powtórzenia przed zapisem tej serii.")
+
+        # "🗑️ Usuń" - NOWOŚĆ: kasuje tę serię zarówno z bazy danych, jak i
+        # z pól na ekranie (przydatne np. gdy dodałeś serię 4, a jednak
+        # zrobiłeś dziś tylko 3, albo pomyliłeś się przy wpisywaniu).
+        if col_usun.button(f"🗑️ Usuń {i}", key=f"del_set_{ex['key']}_{i}"):
+            # Zapisanie 0/0 dla tego numeru serii = funkcja save_single_set
+            # sama skasuje wiersz z bazy (patrz warunek "weight>0 or reps>0"
+            # w database.py) i nic nowego nie wstawi.
+            save_single_set(TODAY, current_day_data["day_key"], ex_name, i, 0.0, 0)
+            # Zerujemy też WARTOŚCI W POLACH na ekranie - inaczej po
+            # odświeżeniu nadal widziałbyś starą liczbę (bo pole number_input
+            # "pamięta" swoją wartość w session_state, dopóki jej nie
+            # nadpiszemy).
+            st.session_state[f"w_{ex['key']}_{i}"] = 0.0
+            st.session_state[f"r_{ex['key']}_{i}"] = 0
+            st.toast(f"Usunięto serię {i}", icon="🗑️")
+            st.rerun()
+
+        st.divider()
 
     if st.button("➕ Dodaj serię", key="add_set_btn"):
         st.session_state[sets_count_key] += 1
         st.rerun()
+
+    # --- Stoper odpoczynku - pokazuje się po zapisaniu dowolnej serii -------
+    if st.session_state.stoper_widoczny:
+        pokaz_stoper_odpoczynku(st.session_state.stoper_nonce)
+        if st.button("❌ Ukryj stoper", key="ukryj_stoper_btn"):
+            st.session_state.stoper_widoczny = False
+            st.rerun()
 
     st.markdown("---")
     if st.button("✅ Zapisz wszystko i wróć do listy", type="primary", key="save_exercise_btn"):

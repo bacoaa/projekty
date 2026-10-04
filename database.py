@@ -19,6 +19,19 @@ import sqlite3
 # zapisać w jednej kolumnie SQLite, i z powrotem.
 import json
 
+# "os" - do sprawdzania/usuwania plików tymczasowych przy robieniu kopii
+# zapasowej i przywracaniu bazy danych.
+import os
+
+# "shutil" - do bezpiecznego KOPIOWANIA plików (używane przy przywracaniu
+# kopii zapasowej - podmieniamy plik bazy danych na nowy).
+import shutil
+
+# "tempfile" - do stworzenia TYMCZASOWEGO pliku, w którym testujemy
+# przesłaną kopię zapasową, ZANIM nadpiszemy nią prawdziwą, używaną bazę
+# (żeby zepsuty plik przypadkiem nie skasował Twoich prawdziwych danych).
+import tempfile
+
 # Importujemy narzędzia do pracy z datami i czasem (potrzebne np. do liczenia
 # "3 tygodnie wstecz").
 from datetime import datetime, timedelta
@@ -387,7 +400,7 @@ def get_exercises_for_session(date_str):
     """
     Zwraca listę nazw ćwiczeń wykonanych w danym dniu (dacie), w kolejności,
     w jakiej zostały pierwszy raz zapisane (czyli w kolejności wykonywania
-    treningu)  dzięki sortowaniu po najmniejszym "id" dla danej nazwy.
+    treningu) - dzięki sortowaniu po najmniejszym "id" dla danej nazwy.
 
     Zwraca zwykłą listę stringów, np.:
     ["Hack Squat (przysiad na maszynie)", "Wyciskanie hantli nad głowę siedząc (barki)", ...]
@@ -468,3 +481,67 @@ def get_today_sets(exercise_name, date_str):
             (exercise_name, date_str),
         ).fetchall()
         return [(r["set_number"], r["weight"], r["reps"]) for r in rows]
+
+
+# ----------------------------------------------------------------------------
+# KOPIA ZAPASOWA BAZY DANYCH (eksport / import całego pliku .db)
+# ----------------------------------------------------------------------------
+# DLACZEGO TO POTRZEBNE? Streamlit Community Cloud NIE gwarantuje, że plik
+# bazy danych przetrwa każdy restart/redeploy appki - w skrajnym przypadku
+# cała historia treningów może zniknąć. Te dwie funkcje pozwalają Ci
+# RĘCZNIE pobrać kopię całej bazy na swój telefon/komputer, a potem (gdyby
+# dane zniknęły) wgrać ją z powrotem.
+# ----------------------------------------------------------------------------
+def eksportuj_baze_jako_bajty():
+    """
+    Odczytuje CAŁY plik bazy danych (workout_log.db) z dysku i zwraca go
+    jako surowe bajty - dokładnie w takiej postaci, jakiej potrzebuje
+    st.download_button() w app.py, żeby zaoferować Ci pobranie pliku.
+    """
+    # "rb" = "read binary" - czytamy plik jako surowe bajty, a nie tekst
+    # (bazy danych SQLite to pliki binarne, nie da się ich otworzyć jako
+    # zwykły tekst).
+    with open(DB_PATH, "rb") as plik:
+        return plik.read()
+
+
+def waliduj_i_przywroc_baze(nowe_bajty):
+    """
+    Przyjmuje bajty PRZESŁANEGO przez Ciebie pliku (np. wcześniej pobranej
+    kopii zapasowej) i - JEŚLI wygląda on na poprawną bazę danych tej
+    aplikacji - podmienia nim obecny plik workout_log.db.
+
+    WAŻNE zabezpieczenie: najpierw zapisujemy przesłane bajty do pliku
+    TYMCZASOWEGO i sprawdzamy, czy da się z niego poprawnie odczytać
+    tabelę "workout_sets". Dopiero jeśli test się powiedzie, nadpisujemy
+    PRAWDZIWĄ bazę. Dzięki temu, jeśli przez pomyłkę wgrasz zepsuty albo
+    zupełnie inny plik, Twoje obecne dane NIE ZOSTANĄ utracone.
+
+    Zwraca krotkę (czy_sie_udalo: bool, komunikat: str).
+    """
+    # Tworzymy plik tymczasowy (sam go nie kasujemy automatycznie -
+    # "delete=False" - bo chcemy go jeszcze otworzyć po zamknięciu bloku).
+    tymczasowy_plik = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tymczasowy_plik.write(nowe_bajty)
+    tymczasowy_plik.close()
+    sciezka_tymczasowa = tymczasowy_plik.name
+
+    try:
+        # Próbujemy otworzyć przesłany plik jako bazę SQLite i wykonać na
+        # nim najprostsze możliwe zapytanie - jeśli to nie jest poprawna
+        # baza danych naszej aplikacji, to zapytanie rzuci wyjątkiem.
+        testowe_polaczenie = sqlite3.connect(sciezka_tymczasowa)
+        testowe_polaczenie.execute("SELECT COUNT(*) FROM workout_sets")
+        testowe_polaczenie.close()
+    except Exception as blad:
+        # Plik NIE jest poprawną kopią zapasową - sprzątamy po sobie i
+        # zwracamy informację o błędzie, NIE RUSZAJĄC prawdziwej bazy.
+        os.remove(sciezka_tymczasowa)
+        return False, f"To nie wygląda na poprawny plik kopii zapasowej ({blad})."
+
+    # Plik przeszedł test - teraz bezpiecznie nadpisujemy nim prawdziwą
+    # bazę danych aplikacji (shutil.copy nadpisuje plik docelowy, jeśli
+    # już istnieje).
+    shutil.copy(sciezka_tymczasowa, DB_PATH)
+    os.remove(sciezka_tymczasowa)
+    return True, "Przywrócono kopię zapasową! Odśwież stronę, żeby zobaczyć dane."
