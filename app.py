@@ -598,6 +598,23 @@ elif st.session_state.page == "active_exercise":
     col_h2.caption("🔢 Powtórzenia")
 
     for i in range(1, st.session_state[sets_count_key] + 1):
+        # ------------------------------------------------------------------
+        # WAŻNE (naprawa błędu StreamlitWidgetAlreadyInstantiatedError):
+        # Streamlit NIE pozwala zmieniać session_state pola PO tym, jak to
+        # pole zostało już narysowane w tym samym przebiegu skryptu. Dlatego
+        # reset wartości (po kliknięciu "Usuń") NIE MOŻE się dziać w bloku
+        # przycisku poniżej (bo tam pole już by istniało) - musi się zdarzyć
+        # TUTAJ, na samej górze pętli, ZANIM poniższe st.number_input() w
+        # ogóle zostaną utworzone. Przycisk "Usuń" tylko ustawia prostą
+        # flagę (osobny klucz, niezwiązany z żadnym polem) i każe appce się
+        # przeładować - a dopiero NOWY przebieg skryptu, w tym miejscu,
+        # faktycznie zeruje wartości, zanim pola zdążą powstać.
+        flaga_resetu_klucz = f"zresetuj_{ex['key']}_{i}"
+        if st.session_state.get(flaga_resetu_klucz, False):
+            st.session_state[f"w_{ex['key']}_{i}"] = 0.0
+            st.session_state[f"r_{ex['key']}_{i}"] = 0
+            st.session_state[flaga_resetu_klucz] = False
+
         col1, col2 = st.columns(2)
 
         weight = col1.number_input(
@@ -646,12 +663,11 @@ elif st.session_state.page == "active_exercise":
             # sama skasuje wiersz z bazy (patrz warunek "weight>0 or reps>0"
             # w database.py) i nic nowego nie wstawi.
             save_single_set(TODAY, current_day_data["day_key"], ex_name, i, 0.0, 0)
-            # Zerujemy też WARTOŚCI W POLACH na ekranie - inaczej po
-            # odświeżeniu nadal widziałbyś starą liczbę (bo pole number_input
-            # "pamięta" swoją wartość w session_state, dopóki jej nie
-            # nadpiszemy).
-            st.session_state[f"w_{ex['key']}_{i}"] = 0.0
-            st.session_state[f"r_{ex['key']}_{i}"] = 0
+            # NIE zerujemy tu pól bezpośrednio (patrz duży komentarz na
+            # górze pętli "for i in ...") - zamiast tego tylko ustawiamy
+            # flagę. Faktyczne wyzerowanie pól zrobi się SAMO na początku
+            # NASTĘPNEGO przebiegu skryptu, zanim pola zostaną narysowane.
+            st.session_state[f"zresetuj_{ex['key']}_{i}"] = True
             st.toast(f"Usunięto serię {i}", icon="🗑️")
             st.rerun()
 
