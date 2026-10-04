@@ -387,7 +387,7 @@ def get_exercises_for_session(date_str):
     """
     Zwraca listę nazw ćwiczeń wykonanych w danym dniu (dacie), w kolejności,
     w jakiej zostały pierwszy raz zapisane (czyli w kolejności wykonywania
-    treningu) - dzięki sortowaniu po najmniejszym "id" dla danej nazwy.
+    treningu)  dzięki sortowaniu po najmniejszym "id" dla danej nazwy.
 
     Zwraca zwykłą listę stringów, np.:
     ["Hack Squat (przysiad na maszynie)", "Wyciskanie hantli nad głowę siedząc (barki)", ...]

@@ -49,7 +49,7 @@ st.markdown(
 init_db()
 
 # ----------------------------------------------------------------------------
-# 2. NAWIGACJA I STAN APLIKACJI (Session State)
+# 2. NAWIGACJA I STAN APLIKACJI(Session State)
 # ----------------------------------------------------------------------------
 
 # --- 2a. PLANY TRENINGOWE: wczytujemy je z bazy danych, a NIE zawsze od
