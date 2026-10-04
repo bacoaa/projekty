@@ -8,7 +8,7 @@ import copy
 import os
 
 from database import (
-    init_db, save_exercise_sets, get_history, get_today_sets,
+    init_db, save_exercise_sets, save_single_set, get_history, get_today_sets,
     get_all_sessions, get_exercises_for_session, get_sets_for_date, get_progress_data,
     save_app_state, load_app_state,
 )
@@ -467,6 +467,12 @@ elif st.session_state.page == "active_exercise":
 
     sets_data = []
 
+    # Potrzebujemy "day_tab" (klucz dnia, np. "pull") już TERAZ, przy każdym
+    # pojedynczym zapisie serii - a nie tylko na samym końcu jak wcześniej.
+    current_day_data = next(
+        (d for d in st.session_state.workout_days if d["day_key"] == st.session_state.current_day_key),
+        st.session_state.workout_days[0])
+
     col_h1, col_h2 = st.columns(2)
     col_h1.caption("⚖️ Ciężar (kg)")
     col_h2.caption("🔢 Powtórzenia")
@@ -486,14 +492,34 @@ elif st.session_state.page == "active_exercise":
             rep_max = weight * (1 + reps / 30)
             st.caption(f"Szacowany max (1RM): **{rep_max:.1f} kg**")
 
+        # ------------------------------------------------------------------
+        # NOWOŚĆ: przycisk zapisu PRZY KAŻDEJ SERII Z OSOBNA.
+        # Kliknięcie od razu zapisuje TĘ JEDNĄ serię do bazy danych (funkcja
+        # save_single_set w database.py) - nie trzeba czekać do końca
+        # całego ćwiczenia. Dzięki temu, jeśli telefon przeładuje appkę
+        # zaraz po tym (np. wracasz z innej aplikacji), ta seria JUŻ jest
+        # bezpiecznie zapisana - przy ponownym wejściu na to ćwiczenie pole
+        # samo się wypełni zapisaną wartością, a licznik serii automatycznie
+        # pokaże tyle pól, ile już zapisałeś + będziesz mógł kliknąć
+        # "➕ Dodaj serię", żeby dopisać kolejną (np. 3.).
+        if st.button(f"💾 Zapisz serię {i}", key=f"save_set_{ex['key']}_{i}"):
+            zapisano = save_single_set(
+                TODAY, current_day_data["day_key"], ex_name, i, weight, reps
+            )
+            if zapisano:
+                st.toast(f"Zapisano serię {i}! 💪", icon="✅")
+            else:
+                st.warning("Wpisz ciężar lub powtórzenia przed zapisem tej serii.")
+
     if st.button("➕ Dodaj serię", key="add_set_btn"):
         st.session_state[sets_count_key] += 1
         st.rerun()
 
-    if st.button("💾 Zapisz ten wynik", type="primary", key="save_exercise_btn"):
-        current_day_data = next(
-            (d for d in st.session_state.workout_days if d["day_key"] == st.session_state.current_day_key),
-            st.session_state.workout_days[0])
+    st.markdown("---")
+    if st.button("✅ Zapisz wszystko i wróć do listy", type="primary", key="save_exercise_btn"):
+        # Ten przycisk to już tylko "domknięcie" ćwiczenia - zapisuje
+        # wszystkie aktualnie wypełnione pola na raz (na wypadek, gdybyś
+        # czegoś nie zapisał pojedynczo) i wraca do listy ćwiczeń.
         save_exercise_sets(TODAY, current_day_data["day_key"], ex_name, sets_data)
         go_to_exercise_list(current_day_data)
         st.rerun()

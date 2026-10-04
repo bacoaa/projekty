@@ -216,6 +216,55 @@ def save_exercise_sets(date_str, day_tab, exercise_name, sets_data):
         return len(rows)
 
 
+def save_single_set(date_str, day_tab, exercise_name, set_number, weight, reps):
+    """
+    NOWOŚĆ: zapisuje JEDNĄ, konkretną serię od razu po jej wpisaniu -
+    zamiast czekać, aż user skończy CAŁE ćwiczenie i kliknie duży przycisk
+    na dole.
+
+    DLACZEGO TO WAŻNE? Bo jeśli appka na telefonie przeładuje się w
+    trakcie treningu (np. po powrocie z innej aplikacji), to WSZYSTKO, co
+    jest tylko w polach na ekranie, a NIE jest jeszcze w bazie danych -
+    znika bezpowrotnie. Zapisując każdą serię OD RAZU po jej zrobieniu,
+    nic nie gubisz, nawet jeśli appka się przeładuje milisekundę później.
+
+    W przeciwieństwie do save_exercise_sets() (która kasuje i na nowo
+    wstawia WSZYSTKIE serie danego ćwiczenia na raz), ta funkcja rusza
+    TYLKO wiersz o konkretnym numerze serii - inne, już zapisane serie
+    tego ćwiczenia zostają nietknięte.
+
+    Zwraca True, jeśli faktycznie coś zapisano (weight>0 lub reps>0),
+    False jeśli pola były puste (0 i 0) - wtedy nic nie wstawiamy.
+    """
+    with get_connection() as conn:
+        # Najpierw kasujemy STARY wpis TEJ KONKRETNEJ serii (jeśli istniał),
+        # żeby ponowne zapisanie poprawionej wartości nadpisywało, a nie
+        # duplikowało wiersz w bazie.
+        conn.execute(
+            """
+            DELETE FROM workout_sets
+            WHERE date = ? AND exercise_name = ? AND set_number = ?
+            """,
+            (date_str, exercise_name, set_number),
+        )
+
+        if weight > 0 or reps > 0:
+            now = datetime.now().isoformat()
+            conn.execute(
+                """
+                INSERT INTO workout_sets
+                    (date, day_tab, exercise_name, set_number, weight, reps, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (date_str, day_tab, exercise_name, set_number, weight, reps, now),
+            )
+            conn.commit()
+            return True
+
+        conn.commit()
+        return False
+
+
 # ----------------------------------------------------------------------------
 # HISTORIA TEKSTOWA (ostatnie N sesji, do wyświetlenia jako "co robiłem ostatnio")
 # ----------------------------------------------------------------------------
