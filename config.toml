@@ -1,0 +1,35 @@
+# ============================================================================
+# .streamlit/config.toml
+# ----------------------------------------------------------------------------
+# To jest OFICJALNY sposób Streamlit na ustawienie kolorystyki całej appki
+# (tła, przycisków, tekstu) - DZIAŁA RAZEM z custom CSS w app.py, ale
+# ustawia też rzeczy, których samym CSS nie da się łatwo "dosięgnąć"
+# (np. kolor zaznaczenia w polach, suwaki, domyślne tło widgetów).
+#
+# PALETA: "styl skandynawski" - ciepłe, naturalne, stonowane barwy zamiast
+# ostrej czerni/bieli: kremowe tło (jak papier), szałwiowa zieleń jako
+# główny akcent, miękki węgiel zamiast czystej czerni w tekście.
+#
+# WAŻNE: ten plik MUSI być w folderze dokładnie o nazwie ".streamlit"
+# (z kropką na początku!) w głównym katalogu Twojego repo na GitHubie,
+# obok app.py i database.py. Streamlit Cloud sam go wykryje przy starcie.
+# ============================================================================
+[theme]
+base = "light"
+
+# Główny kolor akcentu - przyciski "primary", suwaki, zaznaczenia, focus.
+primaryColor = "#6B8F71"
+
+# Tło głównej treści strony - ciepły, kremowy odcień zamiast ostrej bieli.
+backgroundColor = "#FAF7F2"
+
+# Tło "drugoplanowe" - używane przez expander, pola input, karty.
+secondaryBackgroundColor = "#F0EBE3"
+
+# Kolor tekstu - miękki węgiel (ciemny, ale nie czysta czerń #000).
+textColor = "#2B2B2B"
+
+# Rodzina czcionek - "sans serif" każe Streamlit użyć systemowej czcionki
+# bezszeryfowej jako fallback; właściwą, "ładniejszą" czcionkę (Inter)
+# doczytujemy dodatkowo przez Google Fonts w CSS w app.py.
+font = "sans serif"
