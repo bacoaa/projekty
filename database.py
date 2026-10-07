@@ -125,6 +125,24 @@ def init_db():
         )
         conn.commit()
 
+        # ---------------------------------------------------------------
+        # NOWOŚĆ: trzecia tabela - "body_weight" (waga ciała w czasie).
+        # Jeden wpis na dzień: jeśli zważysz się drugi raz tego samego
+        # dnia, nowy pomiar NADPISUJE poprzedni (dzięki PRIMARY KEY na
+        # kolumnie "date" - SQLite nie pozwoli mieć dwóch wierszy z tą
+        # samą datą).
+        # ---------------------------------------------------------------
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS body_weight (
+                date TEXT PRIMARY KEY,  -- data pomiaru "RRRR-MM-DD" - jedna na dzień
+                weight REAL NOT NULL,   -- waga w kg
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
 
 # ----------------------------------------------------------------------------
 # TRWAŁY MAGAZYN "KLUCZ -> WARTOŚĆ" (żeby dane przeżyły przeładowanie strony)
@@ -545,3 +563,95 @@ def waliduj_i_przywroc_baze(nowe_bajty):
     shutil.copy(sciezka_tymczasowa, DB_PATH)
     os.remove(sciezka_tymczasowa)
     return True, "Przywrócono kopię zapasową! Odśwież stronę, żeby zobaczyć dane."
+
+
+# ----------------------------------------------------------------------------
+# WAGA CIAŁA W CZASIE
+# ----------------------------------------------------------------------------
+def zapisz_wage_ciala(date_str, waga_kg):
+    """
+    Zapisuje (albo NADPISUJE, jeśli dzisiaj już się ważyłeś) Twoją wagę
+    ciała dla podanej daty. "INSERT OR REPLACE" działa tu tak samo jak
+    w save_app_state() - jeśli wiersz z tą datą już istnieje, podmienia
+    go nowym pomiarem, zamiast tworzyć duplikat.
+    """
+    with get_connection() as conn:
+        teraz = datetime.now().isoformat()
+        conn.execute(
+            "INSERT OR REPLACE INTO body_weight (date, weight, created_at) VALUES (?, ?, ?)",
+            (date_str, waga_kg, teraz),
+        )
+        conn.commit()
+
+
+def pobierz_historie_wagi_ciala():
+    """
+    Zwraca CAŁĄ historię pomiarów wagi ciała, od najstarszego do
+    najnowszego pomiaru - gotowe do narysowania na wykresie liniowym.
+    Format: [{"date": "2026-09-01", "weight": 82.4}, ...]
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute(
+            "SELECT date, weight FROM body_weight ORDER BY date ASC"
+        ).fetchall()
+        return [{"date": w["date"], "weight": w["weight"]} for w in wiersze]
+
+
+def pobierz_wage_na_dzien(date_str):
+    """
+    Zwraca wagę ciała zapisaną na KONKRETNY dzień, albo None, jeśli tego
+    dnia jeszcze się nie ważyłeś. Używane do "podpowiedzenia" dzisiejszej
+    wagi w polu input, jeśli już ją dziś wpisałeś.
+    """
+    with get_connection() as conn:
+        wiersz = conn.execute(
+            "SELECT weight FROM body_weight WHERE date = ?", (date_str,)
+        ).fetchone()
+        return wiersz["weight"] if wiersz is not None else None
+
+
+# ----------------------------------------------------------------------------
+# SZYBKIE STATYSTYKI (do wyświetlenia na Menu Głównym)
+# ----------------------------------------------------------------------------
+def pobierz_szybkie_statystyki():
+    """
+    Liczy kilka "podsumowujących" liczb z CAŁEJ historii treningów naraz -
+    do pokazania jako duże, efektowne liczby na Menu Głównym.
+
+    Zwraca słownik:
+        {
+            "liczba_treningow": int,   -> ile RÓŻNYCH dni treningowych odbyłeś
+            "liczba_serii": int,       -> ile serii łącznie zapisałeś
+            "laczna_objetosc": float,  -> suma (ciężar * powtórzenia) ze WSZYSTKICH serii
+        }
+    """
+    with get_connection() as conn:
+        # COUNT(DISTINCT date) liczy, ile RÓŻNYCH dat występuje w tabeli -
+        # czyli ile osobnych dni treningowych odbyłeś (niezależnie od tego,
+        # ile ćwiczeń/serii zrobiłeś danego dnia).
+        liczba_treningow = conn.execute(
+            "SELECT COUNT(DISTINCT date) AS ile FROM workout_sets"
+        ).fetchone()["ile"]
+
+        # Zwykłe COUNT(*) liczy WSZYSTKIE wiersze, czyli wszystkie
+        # zapisane serie w historii appki.
+        liczba_serii = conn.execute(
+            "SELECT COUNT(*) AS ile FROM workout_sets"
+        ).fetchone()["ile"]
+
+        # SUM(weight * reps) liczy łączną "objętość treningową" (w kg) ze
+        # WSZYSTKICH serii w historii - czyli ile kilogramów łącznie
+        # "przerzuciłeś" od początku korzystania z appki.
+        wynik_objetosci = conn.execute(
+            "SELECT SUM(weight * reps) AS suma FROM workout_sets"
+        ).fetchone()["suma"]
+        # Jeśli baza jest pusta, SUM() zwraca SQL-owy NULL (czyli Python None)
+        # zamiast 0 - zamieniamy to na zwykłe 0.0, żeby app.py nie musiało
+        # się martwić o None przy wyświetlaniu liczby.
+        laczna_objetosc = wynik_objetosci if wynik_objetosci is not None else 0.0
+
+        return {
+            "liczba_treningow": liczba_treningow,
+            "liczba_serii": liczba_serii,
+            "laczna_objetosc": laczna_objetosc,
+        }

@@ -18,6 +18,8 @@ from database import (
     get_all_sessions, get_exercises_for_session, get_sets_for_date, get_progress_data,
     save_app_state, load_app_state,
     eksportuj_baze_jako_bajty, waliduj_i_przywroc_baze,
+    zapisz_wage_ciala, pobierz_historie_wagi_ciala, pobierz_wage_na_dzien,
+    pobierz_szybkie_statystyki,
 )
 from exercises_config import WORKOUT_DAYS, MAX_SETS
 
@@ -36,16 +38,19 @@ def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
     Streamlit tworzy go NA NOWO (a nie "dogrzewa" starego), czyli licznik
     zawsze zaczyna odliczać OD PEŁNEGO czasu, a nie kontynuuje poprzedni.
     """
+    # Kolory stopera w stylu "skandynawskim" - stonowana terakota w trakcie
+    # odpoczynku, szałwiowa zieleń, gdy czas minie (zamiast ostrej
+    # czerwieni/zieleni ze starej wersji).
     kod_html = f"""
     <div id="stoper-kontener-{nonce}" style="
         text-align:center;
-        font-family:sans-serif;
+        font-family:'Inter', sans-serif;
         font-size:2rem;
-        font-weight:700;
+        font-weight:600;
         padding:0.9rem;
         border-radius:14px;
-        background: linear-gradient(90deg, rgba(255,75,75,0.15), rgba(255,75,75,0.05));
-        color:#ff4b4b;
+        background: rgba(201, 123, 91, 0.12);
+        color:#C97B5B;
         transition: all 0.4s ease;">
         ⏱️ Odpoczynek: <span id="stoper-liczba-{nonce}">{sekundy_startowe}</span> s
     </div>
@@ -60,9 +65,8 @@ def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
 
             if (pozostaloSekund_{nonce} <= 0) {{
                 elementKontenera_{nonce}.innerHTML = "💪 GOTOWE! Wracaj do ćwiczenia!";
-                elementKontenera_{nonce}.style.background =
-                    "linear-gradient(90deg, rgba(46,204,113,0.2), rgba(46,204,113,0.05))";
-                elementKontenera_{nonce}.style.color = "#2ecc71";
+                elementKontenera_{nonce}.style.background = "rgba(107, 143, 113, 0.15)";
+                elementKontenera_{nonce}.style.color = "#6B8F71";
                 clearInterval(idIntervalu_{nonce});
             }} else {{
                 elementLiczby_{nonce}.innerText = pozostaloSekund_{nonce};
@@ -77,25 +81,124 @@ def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
 # ----------------------------------------------------------------------------
 st.set_page_config(page_title="Dziennik Treningowy", page_icon="💪", layout="centered")
 
+# ----------------------------------------------------------------------------
+# PALETA KOLORÓW "SKANDYNAWSKA" - jedno miejsce, z którego czerpią WSZYSTKIE
+# style w appce (CSS poniżej i kolory stopera dalej w pliku). Dzięki temu,
+# jeśli kiedyś zechcesz zmienić np. główny kolor akcentu, podmieniasz go
+# TYLKO tutaj, zamiast szukać po całym pliku.
+# ----------------------------------------------------------------------------
+KOLOR_TLO = "#FAF7F2"           # ciepła kremowa biel (jak papier/płótno)
+KOLOR_TLO_KARTY = "#F0EBE3"     # lekko ciemniejszy beż - tła "kart" i pól
+KOLOR_TEKST = "#2B2B2B"         # miękki węgiel zamiast czystej czerni
+KOLOR_TEKST_PRZYGASZONY = "#8A8276"  # ciepły szary - podpisy, etykiety
+KOLOR_AKCENT = "#6B8F71"        # szałwiowa zieleń - główny akcent (przyciski)
+KOLOR_AKCENT_CIEMNY = "#56765C"  # ciemniejsza zieleń - hover/cień
+KOLOR_AKCENT_DRUGI = "#C97B5B"  # stonowana terakota - stoper w trakcie, uwaga
+KOLOR_SUKCES = "#6B8F71"        # zielony - "gotowe", sukces
+KOLOR_OBRAMOWANIE = "#E2DDD4"   # cienkie, ciepłe, jasne obramowania
+
 st.markdown(
-    """
+    f"""
     <style>
-        .block-container {
-            padding-top: 4rem !important; 
+        /* Wczytujemy nowoczesną, bezszeryfową czcionkę Google (Inter) -
+           dużo "czystsza" i bardziej minimalistyczna niż domyślna systemowa,
+           co dobrze pasuje do skandynawskiego, stonowanego stylu. */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+        html, body, [class*="css"] {{
+            font-family: 'Inter', -apple-system, sans-serif;
+        }}
+
+        .block-container {{
+            padding-top: 3.5rem !important;
             padding-bottom: 3rem;
             max-width: 600px;
-        }
-        div.stButton > button {
+        }}
+
+        /* Nagłówki - lżejsza waga czcionki i więcej "oddechu" wygląda
+           bardziej nowocześnie niż standardowe, grube pogrubienie. */
+        h1, h2, h3 {{
+            font-weight: 600 !important;
+            color: {KOLOR_TEKST};
+            letter-spacing: -0.02em;
+        }}
+
+        /* --- PRZYCISKI --------------------------------------------------- */
+        div.stButton > button {{
             width: 100%;
-            border-radius: 10px;
-            font-weight: bold;
-            border: 1px solid #444;
-        }
-        div.stButton > button[kind="primary"] {
-            background-color: #ff4b4b;
+            border-radius: 14px;
+            font-weight: 600;
+            border: 1.5px solid {KOLOR_OBRAMOWANIE};
+            background-color: #FFFFFF;
+            color: {KOLOR_TEKST};
+            padding: 0.6rem 1rem;
+            transition: all 0.15s ease;
+            box-shadow: 0 1px 2px rgba(43, 43, 43, 0.04);
+        }}
+        div.stButton > button:hover {{
+            border-color: {KOLOR_AKCENT};
+            color: {KOLOR_AKCENT_CIEMNY};
+            box-shadow: 0 2px 6px rgba(43, 43, 43, 0.08);
+        }}
+        div.stButton > button[kind="primary"] {{
+            background-color: {KOLOR_AKCENT};
             color: white;
             border: none;
-        }
+            box-shadow: 0 2px 8px rgba(107, 143, 113, 0.35);
+        }}
+        div.stButton > button[kind="primary"]:hover {{
+            background-color: {KOLOR_AKCENT_CIEMNY};
+        }}
+
+        /* --- POLA LICZBOWE (ciężar / powtórzenia) ------------------------ */
+        div[data-testid="stNumberInput"] input {{
+            border-radius: 10px;
+            text-align: center;
+            font-weight: 600;
+            background-color: {KOLOR_TLO_KARTY};
+            border: 1.5px solid {KOLOR_OBRAMOWANIE};
+            color: {KOLOR_TEKST};
+        }}
+
+        /* --- KARTY / EXPANDERY -------------------------------------------
+           Nadajemy im wygląd delikatnych "kart" - zaokrąglone rogi, cienka
+           ramka, lekki cień - zamiast surowych, ostrych paneli. */
+        div[data-testid="stExpander"] {{
+            border-radius: 14px;
+            border: 1.5px solid {KOLOR_OBRAMOWANIE};
+            background-color: #FFFFFF;
+        }}
+
+        /* --- DROBNE PODPISY (st.caption) ---------------------------------- */
+        [data-testid="stCaptionContainer"], .stCaption {{
+            color: {KOLOR_TEKST_PRZYGASZONY} !important;
+        }}
+
+        /* --- LINIE PODZIAŁU (st.divider / ---) ---------------------------- */
+        hr {{
+            border-color: {KOLOR_OBRAMOWANIE} !important;
+            margin: 0.8rem 0 !important;
+        }}
+
+        /* --- Natywne komunikaty Streamlit (info/warning/success) ---------
+           Zostawiamy ich semantyczne kolory (niebieski/żółty/zielony), ale
+           zaokrąglamy rogi i zdejmujemy ostrą ramkę, żeby pasowały do
+           reszty, bardziej "miękkiego" stylu. */
+        div[data-testid="stAlert"] {{
+            border-radius: 12px;
+            border: none;
+        }}
+
+        /* --- "Karta" podsumowania 1RM / historii -------------------------- */
+        .skandy-karta {{
+            background-color: {KOLOR_TLO_KARTY};
+            border-radius: 12px;
+            padding: 0.7rem 0.9rem;
+            margin: 0.4rem 0 0.8rem 0;
+            border-left: 3px solid {KOLOR_AKCENT};
+            font-size: 0.85rem;
+            color: {KOLOR_TEKST};
+        }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -278,6 +381,59 @@ if st.session_state.page == "menu":
     if st.button("📚 HISTORIA I WYKRESY", key="menu_history"):
         go_to_history()
         st.rerun()
+
+    # ------------------------------------------------------------------
+    # NOWOŚĆ: SZYBKIE STATYSTYKI
+    # ------------------------------------------------------------------
+    # Trzy duże liczby podsumowujące CAŁĄ dotychczasową historię - "na
+    # pierwszy rzut oka" widzisz swój postęp, bez wchodzenia w Historię.
+    # st.metric() to wbudowany w Streamlit widget do pokazywania właśnie
+    # takich "kafelkowych" liczb (duża cyfra + mały podpis pod spodem).
+    st.write("")  # odrobina odstępu
+    statystyki = pobierz_szybkie_statystyki()
+
+    if statystyki["liczba_treningow"] > 0:
+        kol_stat1, kol_stat2, kol_stat3 = st.columns(3)
+        kol_stat1.metric("Treningi", statystyki["liczba_treningow"])
+        kol_stat2.metric("Serie", statystyki["liczba_serii"])
+        # ":,.0f" formatuje liczbę z separatorem tysięcy i bez miejsc po
+        # przecinku (np. 12450 -> "12,450") - czytelniej dla dużych liczb.
+        kol_stat3.metric("Objętość", f"{statystyki['laczna_objetosc']:,.0f} kg")
+
+    # ------------------------------------------------------------------
+    # NOWOŚĆ: WAGA CIAŁA W CZASIE
+    # ------------------------------------------------------------------
+    with st.expander("⚖️ Waga ciała"):
+        st.caption("Zważ się i zapisz wynik - zobaczysz, jak zmienia się Twoja waga na przestrzeni czasu.")
+
+        # Jeśli dzisiaj już się ważyłeś, podpowiadamy tę wartość w polu,
+        # zamiast zaczynać zawsze od zera.
+        dzisiejsza_waga = pobierz_wage_na_dzien(TODAY)
+        wartosc_startowa = dzisiejsza_waga if dzisiejsza_waga is not None else 70.0
+
+        kol_waga_input, kol_waga_btn = st.columns([2, 1])
+        nowa_waga = kol_waga_input.number_input(
+            "Twoja waga dzisiaj (kg)",
+            min_value=0.0,
+            max_value=300.0,
+            step=0.1,
+            value=wartosc_startowa,
+            key="input_waga_ciala",
+            label_visibility="collapsed",
+        )
+        if kol_waga_btn.button("💾 Zapisz wagę", key="zapisz_wage_btn"):
+            zapisz_wage_ciala(TODAY, nowa_waga)
+            st.toast(f"Zapisano wagę: {nowa_waga:g} kg", icon="⚖️")
+            st.rerun()
+
+        # Wykres - tylko jeśli mamy co najmniej 2 pomiary (jeden punkt nie
+        # tworzy sensownej linii).
+        historia_wagi = pobierz_historie_wagi_ciala()
+        if len(historia_wagi) > 1:
+            dane_wykresu = {wpis["date"]: wpis["weight"] for wpis in historia_wagi}
+            st.line_chart(dane_wykresu)
+        elif len(historia_wagi) == 1:
+            st.caption("Zapisz wagę jeszcze raz innego dnia, żeby zobaczyć wykres zmian.")
 
     # ------------------------------------------------------------------
     # NOWOŚĆ: KOPIA ZAPASOWA BAZY DANYCH
