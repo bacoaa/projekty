@@ -655,3 +655,233 @@ def pobierz_szybkie_statystyki():
             "liczba_serii": liczba_serii,
             "laczna_objetosc": laczna_objetosc,
         }
+
+
+# ============================================================================
+# SEKCJA "SUPER STATYSTYKI" - zaawansowany dashboard analityczny
+# ============================================================================
+def _poniedzialek_tygodnia(data_obj):
+    """
+    Pomocnicza funkcja: dla podanej daty zwraca datę PONIEDZIAŁKU tego
+    samego tygodnia kalendarzowego. Używamy tego jako "klucza tygodnia"
+    we WSZYSTKICH statystykach tygodniowych poniżej - dzięki temu dwie
+    różne daty z tego samego tygodnia (np. wtorek i piątek) zawsze dadzą
+    ten sam klucz, a różne tygodnie da się łatwo porównać / sprawdzić,
+    czy są "kolejne" (różnica dokładnie 7 dni).
+
+    "data_obj.weekday()" zwraca 0 dla poniedziałku, 1 dla wtorku, ..., 6
+    dla niedzieli - więc odejmując tyle dni, zawsze "cofamy się" do
+    najbliższego poniedziałku.
+    """
+    return data_obj - timedelta(days=data_obj.weekday())
+
+
+def pobierz_tygodniowa_objetosc():
+    """
+    Zwraca łączną objętość treningową (ciężar * powtórzenia, zsumowane
+    ze WSZYSTKICH ćwiczeń i serii) zgrupowaną PO TYGODNIU KALENDARZOWYM,
+    od najstarszego do najnowszego tygodnia, w którym cokolwiek zapisałeś.
+
+    Grupowanie po tygodniu (a nie po dniu) daje wyraźniejszy trend, nawet
+    jeśli trenujesz nieregularnie w ciągu tygodnia.
+
+    Format: [{"tydzien": "2026-08-25", "objetosc": 1234.5}, ...]
+    (klucz "tydzien" to data PONIEDZIAŁKU danego tygodnia, w formacie
+    "RRRR-MM-DD" - ten sam format co wszędzie indziej w bazie)
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute(
+            "SELECT date, weight, reps FROM workout_sets ORDER BY date ASC"
+        ).fetchall()
+
+    objetosc_wg_tygodnia = {}
+    for w in wiersze:
+        data_obj = datetime.strptime(w["date"], "%Y-%m-%d")
+        klucz = _poniedzialek_tygodnia(data_obj).strftime("%Y-%m-%d")
+        objetosc_wg_tygodnia[klucz] = objetosc_wg_tygodnia.get(klucz, 0.0) + w["weight"] * w["reps"]
+
+    return [
+        {"tydzien": tydz, "objetosc": obj}
+        for tydz, obj in sorted(objetosc_wg_tygodnia.items())
+    ]
+
+
+def pobierz_objetosc_wg_dnia_treningowego():
+    """
+    Zwraca łączną objętość treningową (od początku historii) zgrupowaną
+    według TYPU dnia treningowego (klucz "day_tab", np. "pull"/"push"/
+    "legs") - pokazuje, który typ treningu "waży" najwięcej w Twojej
+    dotychczasowej historii.
+    Format: {"pull": 12345.0, "push": 9876.0, "legs": 15000.0}
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute(
+            "SELECT day_tab, SUM(weight * reps) AS suma FROM workout_sets GROUP BY day_tab"
+        ).fetchall()
+        return {w["day_tab"]: w["suma"] for w in wiersze}
+
+
+def pobierz_rekordy_osobiste():
+    """
+    Dla KAŻDEGO ćwiczenia, jakie kiedykolwiek wykonałeś, znajduje jego
+    najlepszy SZACOWANY 1RM (wzór Epleya) w całej historii, razem z datą,
+    kiedy padł ten rekord, i dokładnym ciężarem/powtórzeniami, które go
+    wygenerowały.
+
+    Zwraca listę posortowaną malejąco wg 1RM (najmocniejsze ćwiczenie
+    na górze):
+    [{"cwiczenie": ..., "najlepszy_1rm": ..., "data": ..., "waga": ..., "powt": ...}, ...]
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute(
+            "SELECT exercise_name, date, weight, reps FROM workout_sets"
+        ).fetchall()
+
+    najlepsze = {}  # exercise_name -> słownik z jego najlepszym wpisem
+    for w in wiersze:
+        if w["weight"] <= 0 or w["reps"] <= 0:
+            continue
+        rm = w["weight"] * (1 + w["reps"] / 30)
+        obecny_rekord = najlepsze.get(w["exercise_name"])
+        if obecny_rekord is None or rm > obecny_rekord["najlepszy_1rm"]:
+            najlepsze[w["exercise_name"]] = {
+                "Ćwiczenie": w["exercise_name"],
+                "najlepszy_1rm": round(rm, 1),
+                "Data": w["date"],
+                "Ciężar (kg)": w["weight"],
+                "Powt.": w["reps"],
+            }
+
+    lista = list(najlepsze.values())
+    # Sortujemy malejąco po 1RM - najmocniejsze ćwiczenie na samej górze.
+    lista.sort(key=lambda wpis: wpis["najlepszy_1rm"], reverse=True)
+
+    # Zmieniamy nazwę techniczną "najlepszy_1rm" na ładną etykietę z
+    # jednostką DOPIERO na końcu - dzięki temu sortowanie wyżej operowało
+    # na czystej liczbie, a dopiero teraz "ubieramy" ją do wyświetlenia.
+    for wpis in lista:
+        wpis["Szacowany 1RM"] = f"{wpis.pop('najlepszy_1rm')} kg"
+
+    return lista
+
+
+def pobierz_info_o_passie():
+    """
+    Liczy Twoją "passę treningową" liczoną w TYGODNIACH KALENDARZOWYCH -
+    czyli ile kolejnych tygodni z rzędu miałeś PRZYNAJMNIEJ JEDEN trening.
+    To bardziej realistyczna miara niż "dni z rzędu", bo mało kto trenuje
+    dosłownie codziennie.
+
+    Zwraca: {"aktualna_passa": int, "najdluzsza_passa": int}
+    (wartości w TYGODNIACH, nie dniach)
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute("SELECT DISTINCT date FROM workout_sets").fetchall()
+
+    if not wiersze:
+        return {"aktualna_passa": 0, "najdluzsza_passa": 0}
+
+    # Zbiór UNIKALNYCH poniedziałków (jeden na każdy tydzień, w którym
+    # cokolwiek zrobiłeś), posortowany chronologicznie.
+    poniedzialki = sorted({
+        _poniedzialek_tygodnia(datetime.strptime(w["date"], "%Y-%m-%d"))
+        for w in wiersze
+    })
+
+    # --- Najdłuższa passa w CAŁEJ historii -----------------------------
+    # Przechodzimy po kolejnych poniedziałkach: jeśli różnica między
+    # kolejnymi wynosi DOKŁADNIE 7 dni, to są to "sąsiednie" tygodnie -
+    # passa rośnie. W przeciwnym razie passa zaczyna się od nowa (= 1).
+    najdluzsza = 1
+    biezaca = 1
+    for i in range(1, len(poniedzialki)):
+        if (poniedzialki[i] - poniedzialki[i - 1]).days == 7:
+            biezaca += 1
+        else:
+            biezaca = 1
+        najdluzsza = max(najdluzsza, biezaca)
+
+    # --- Aktualna passa (czy wciąż "żyje") -------------------------------
+    # Sprawdzamy, czy ostatni zanotowany tydzień to tydzień BIEŻĄCY albo
+    # POPRZEDNI (żeby nie zerować passy tylko dlatego, że ten tydzień
+    # jeszcze się nie skończył, a user jeszcze dziś nie trenował).
+    dzisiejszy_poniedzialek = _poniedzialek_tygodnia(datetime.now())
+    ostatni_zanotowany = poniedzialki[-1]
+    roznica_tygodni = (dzisiejszy_poniedzialek - ostatni_zanotowany).days // 7
+
+    if roznica_tygodni <= 1:
+        # Passa wciąż "żyje" - liczymy jej długość, cofając się od KOŃCA
+        # listy poniedziałków, dopóki kolejne różnice to dokładnie 7 dni.
+        aktualna = 1
+        for i in range(len(poniedzialki) - 1, 0, -1):
+            if (poniedzialki[i] - poniedzialki[i - 1]).days == 7:
+                aktualna += 1
+            else:
+                break
+    else:
+        # Minął co najmniej jeden PEŁNY tydzień bez treningu - passa przerwana.
+        aktualna = 0
+
+    return {"aktualna_passa": aktualna, "najdluzsza_passa": najdluzsza}
+
+
+def pobierz_korelacje_waga_objetosc():
+    """
+    Liczy WSPÓŁCZYNNIK KORELACJI PEARSONA między Twoją wagą ciała a
+    tygodniową objętością treningową - czysta statystyka, bez żadnych
+    zewnętrznych bibliotek (liczymy wzór ręcznie, bo appka nie ma numpy).
+
+    Wartość "r" mieści się zawsze między -1 a +1:
+        +1  -> idealna dodatnia korelacja (cięższe tygodnie = wyższa waga)
+         0  -> brak liniowej zależności
+        -1  -> idealna ujemna korelacja (cięższe tygodnie = niższa waga)
+
+    Wymaga co najmniej 3 WSPÓLNYCH tygodni (czyli tygodni, w których masz
+    ZARÓWNO zapisaną wagę ciała, JAK I trening) - przy mniejszej liczbie
+    punktów korelacja nie ma sensu statystycznego, więc zwracamy None.
+
+    Zwraca: {"r": float, "liczba_wspolnych_tygodni": int} albo None.
+    """
+    tygodniowa_objetosc = {
+        wpis["tydzien"]: wpis["objetosc"] for wpis in pobierz_tygodniowa_objetosc()
+    }
+
+    historia_wagi = pobierz_historie_wagi_ciala()
+    waga_wg_tygodnia = {}
+    for wpis in historia_wagi:
+        d = datetime.strptime(wpis["date"], "%Y-%m-%d")
+        klucz = _poniedzialek_tygodnia(d).strftime("%Y-%m-%d")
+        # Jeśli masz kilka pomiarów wagi w jednym tygodniu, bierzemy ich
+        # ŚREDNIĄ (patrz obliczenie "srednia_waga_wg_tygodnia" niżej).
+        waga_wg_tygodnia.setdefault(klucz, []).append(wpis["weight"])
+    srednia_waga_wg_tygodnia = {
+        tydz: sum(wagi) / len(wagi) for tydz, wagi in waga_wg_tygodnia.items()
+    }
+
+    # Interesują nas TYLKO tygodnie, które występują w OBU zbiorach danych.
+    wspolne_tygodnie = sorted(
+        set(tygodniowa_objetosc.keys()) & set(srednia_waga_wg_tygodnia.keys())
+    )
+    if len(wspolne_tygodnie) < 3:
+        return None
+
+    xs = [tygodniowa_objetosc[t] for t in wspolne_tygodnie]
+    ys = [srednia_waga_wg_tygodnia[t] for t in wspolne_tygodnie]
+
+    n = len(xs)
+    srednia_x = sum(xs) / n
+    srednia_y = sum(ys) / n
+
+    # Wzór Pearsona: kowariancja podzielona przez iloczyn odchyleń
+    # standardowych obu zmiennych.
+    kowariancja = sum((x - srednia_x) * (y - srednia_y) for x, y in zip(xs, ys))
+    odchylenie_x = sum((x - srednia_x) ** 2 for x in xs) ** 0.5
+    odchylenie_y = sum((y - srednia_y) ** 2 for y in ys) ** 0.5
+
+    if odchylenie_x == 0 or odchylenie_y == 0:
+        # Brak jakiejkolwiek zmienności w jednej ze zmiennych (np. ta sama
+        # waga ciała przez cały czas) - korelacja matematycznie nieokreślona.
+        return None
+
+    r = kowariancja / (odchylenie_x * odchylenie_y)
+    return {"r": r, "liczba_wspolnych_tygodni": n}

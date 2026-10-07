@@ -20,6 +20,8 @@ from database import (
     eksportuj_baze_jako_bajty, waliduj_i_przywroc_baze,
     zapisz_wage_ciala, pobierz_historie_wagi_ciala, pobierz_wage_na_dzien,
     pobierz_szybkie_statystyki,
+    pobierz_tygodniowa_objetosc, pobierz_objetosc_wg_dnia_treningowego,
+    pobierz_rekordy_osobiste, pobierz_info_o_passie, pobierz_korelacje_waga_objetosc,
 )
 from exercises_config import WORKOUT_DAYS, MAX_SETS
 
@@ -268,7 +270,7 @@ if "page" not in st.session_state:
     # Bezpieczna wartość domyślna - gdyby coś dalej nie pasowało.
     st.session_state.page = "menu"
 
-    if zapisana_strona in ("select_day", "history"):
+    if zapisana_strona in ("select_day", "history", "stats"):
         # Te dwa ekrany nie wymagają żadnych dodatkowych danych do odtworzenia.
         st.session_state.page = zapisana_strona
 
@@ -365,6 +367,12 @@ def go_to_history():
     st.query_params["page"] = "history"
 
 
+def go_to_stats():
+    st.session_state.page = "stats"
+    st.query_params.clear()
+    st.query_params["page"] = "stats"
+
+
 # ----------------------------------------------------------------------------
 # 3. WIDOKI APLIKACJI
 # ----------------------------------------------------------------------------
@@ -380,6 +388,10 @@ if st.session_state.page == "menu":
 
     if st.button("📚 HISTORIA I WYKRESY", key="menu_history"):
         go_to_history()
+        st.rerun()
+
+    if st.button("📈 SUPER STATYSTYKI", key="menu_stats"):
+        go_to_stats()
         st.rerun()
 
     # ------------------------------------------------------------------
@@ -866,7 +878,15 @@ elif st.session_state.page == "history":
             date_str = sess["date"]
             day_tab = sess["day_tab"]
 
-            with st.expander(f"📅 Trening: {date_str} ({day_tab.upper()})"):
+            # ------------------------------------------------------------------
+            # ZMIANA: zamiast st.expander() (który trzeba KLIKNĄĆ, żeby zobaczyć
+            # zawartość), używamy st.container(border=True) - to po prostu
+            # "karta" z cienką ramką, a WSZYSTKO w środku (ćwiczenia, serie,
+            # wykresy) jest widoczne OD RAZU, bez dodatkowego kliknięcia.
+            # ------------------------------------------------------------------
+            with st.container(border=True):
+                st.markdown(f"#### 📅 {date_str} ({day_tab.upper()})")
+
                 exercises_in_session = get_exercises_for_session(date_str)
                 for ex_name in exercises_in_session:
                     st.markdown(f"**{ex_name}**")
@@ -879,3 +899,94 @@ elif st.session_state.page == "history":
                         st.write("📈 *Progres maksymalnego ciężaru:*")
                         chart_data = {row["date"]: row["max_weight"] for row in prog_data}
                         st.line_chart(chart_data)
+
+            # Odstęp między kolejnymi "kartami" sesji treningowych.
+            st.write("")
+
+
+# --- EKRAN 5: SUPER STATYSTYKI (dashboard analityczny) ---
+elif st.session_state.page == "stats":
+    if st.button("⬅️ Wróć do Menu", key="back_to_menu_from_stats"):
+        go_to_menu()
+        st.rerun()
+
+    st.header("📈 Super Statystyki")
+
+    # --- 1. TYGODNIOWA OBJĘTOŚĆ TRENINGOWA ----------------------------------
+    st.subheader("🏋️ Tygodniowa objętość treningowa")
+    st.caption(
+        "Suma (ciężar × powtórzenia) ze WSZYSTKICH ćwiczeń i serii, "
+        "zgrupowana po tygodniu kalendarzowym (klucz = poniedziałek tygodnia)."
+    )
+    tygodniowa_objetosc = pobierz_tygodniowa_objetosc()
+    if len(tygodniowa_objetosc) > 1:
+        dane_wykresu_obj = {w["tydzien"]: w["objetosc"] for w in tygodniowa_objetosc}
+        st.line_chart(dane_wykresu_obj)
+    else:
+        st.info("Potrzeba treningów z co najmniej 2 różnych tygodni, żeby narysować trend.")
+
+    st.divider()
+
+    # --- 2. OBJĘTOŚĆ WG TYPU TRENINGU ---------------------------------------
+    st.subheader("📊 Objętość wg typu treningu")
+    st.caption("Który typ treningu (Pull / Push / Nogi) odpowiada za najwięcej 'przerzuconych' kilogramów.")
+    objetosc_wg_dnia = pobierz_objetosc_wg_dnia_treningowego()
+    if objetosc_wg_dnia:
+        st.bar_chart(objetosc_wg_dnia)
+    else:
+        st.info("Brak jeszcze danych do pokazania.")
+
+    st.divider()
+
+    # --- 3. REKORDY OSOBISTE (1RM) ------------------------------------------
+    st.subheader("🏆 Rekordy osobiste (szacowany 1RM)")
+    st.caption("Najlepszy szacowany ciężar maksymalny (wzór Epleya) w CAŁEJ historii, dla każdego ćwiczenia.")
+    rekordy = pobierz_rekordy_osobiste()
+    if rekordy:
+        st.dataframe(rekordy, use_container_width=True, hide_index=True)
+    else:
+        st.info("Brak jeszcze zapisanych serii.")
+
+    st.divider()
+
+    # --- 4. PASSA TRENINGOWA -------------------------------------------------
+    st.subheader("🔥 Passa treningowa")
+    st.caption("Liczona w TYGODNIACH: ile tygodni z rzędu miałeś przynajmniej jeden trening.")
+    info_passy = pobierz_info_o_passie()
+    kol_passa1, kol_passa2 = st.columns(2)
+    kol_passa1.metric("Aktualna passa", f"{info_passy['aktualna_passa']} tyg.")
+    kol_passa2.metric("Najdłuższa passa", f"{info_passy['najdluzsza_passa']} tyg.")
+
+    st.divider()
+
+    # --- 5. KORELACJA: WAGA CIAŁA ↔ OBJĘTOŚĆ TYGODNIOWA ---------------------
+    st.subheader("⚖️ Korelacja: waga ciała ↔ objętość treningowa")
+    st.caption(
+        "Współczynnik korelacji Pearsona (r) między Twoją tygodniową wagą ciała "
+        "a tygodniową objętością treningową. Wymaga co najmniej 3 wspólnych tygodni."
+    )
+    korelacja = pobierz_korelacje_waga_objetosc()
+    if korelacja is None:
+        st.info(
+            "Za mało wspólnych danych (potrzeba wagi ciała I treningów z co "
+            "najmniej 3 różnych tygodni)."
+        )
+    else:
+        r = korelacja["r"]
+        # Prosta interpretacja siły korelacji wg powszechnie przyjętych
+        # progów (wartość bezwzględna |r|) - czysto informacyjnie.
+        sila_r = abs(r)
+        if sila_r >= 0.7:
+            opis = "silna"
+        elif sila_r >= 0.4:
+            opis = "umiarkowana"
+        elif sila_r >= 0.2:
+            opis = "słaba"
+        else:
+            opis = "znikoma / brak"
+        kierunek = "dodatnia" if r >= 0 else "ujemna"
+
+        kol_r1, kol_r2 = st.columns(2)
+        kol_r1.metric("Współczynnik r", f"{r:.3f}")
+        kol_r2.metric("Wspólne tygodnie", korelacja["liczba_wspolnych_tygodni"])
+        st.caption(f"Interpretacja: korelacja **{opis} {kierunek}**.")
