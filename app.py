@@ -22,6 +22,8 @@ from database import (
     pobierz_szybkie_statystyki,
     pobierz_tygodniowa_objetosc, pobierz_objetosc_wg_dnia_treningowego,
     pobierz_rekordy_osobiste, pobierz_info_o_passie, pobierz_korelacje_waga_objetosc,
+    pobierz_najlepszy_1rm_dla_cwiczenia,
+    pobierz_podsumowanie_sesji, pobierz_poprzednia_sesje_tego_typu,
 )
 from exercises_config import WORKOUT_DAYS, MAX_SETS
 
@@ -30,6 +32,161 @@ TODAY = datetime.now().strftime("%Y-%m-%d")
 
 # Ile sekund ma domyślnie trwać stoper odpoczynku po zapisaniu serii.
 SEKUNDY_ODPOCZYNKU = 90
+
+
+def pokaz_media_cwiczenia(sciezka):
+    """
+    Wyświetla media ćwiczenia (zdjęcie, GIF albo FILM mp4) - automatycznie
+    rozpoznając, czego użyć, na podstawie ROZSZERZENIA pliku:
+
+    - .mp4 / .webm / .mov -> st.video() z loop=True, autoplay=True,
+      muted=True - czyli film sam się odtwarza w kółko, bez dźwięku
+      (DOKŁADNIE jak gif, tylko lepszej jakości i mniejszy rozmiar pliku
+      niż gif dla tego samego materiału wideo).
+    - wszystko inne (.jpg, .png, .gif...) -> zwykłe st.image(), tak jak
+      do tej pory (gify animują się same, bez żadnego dodatkowego kodu).
+
+    Jeśli plik jeszcze nie istnieje na dysku (nie podmieniłeś placeholdera),
+    appka się nie wywala - po prostu nic nie pokazuje w tym miejscu.
+    """
+    if not sciezka or not os.path.exists(sciezka):
+        return
+
+    # ".mp4".lower() na końcu ścieżki pliku - sprawdzamy rozszerzenie
+    # niezależnie od wielkości liter (".MP4" też zadziała).
+    rozszerzenie = sciezka.lower().rsplit(".", 1)[-1] if "." in sciezka else ""
+
+    if rozszerzenie in ("mp4", "webm", "mov"):
+        st.video(
+            sciezka,
+            loop=True,       # film sam zapętla się od nowa po zakończeniu
+            autoplay=True,   # zaczyna grać od razu, bez klikania "play"
+            muted=True,      # BEZ DŹWIĘKU - wymagane przez przeglądarki, żeby
+                              # autoplay w ogóle zadziałał bez kliknięcia usera
+        )
+    else:
+        st.image(sciezka, use_container_width=True)
+
+
+def narysuj_drzewo_passy(liczba_tygodni_passy):
+    """
+    Generuje proste, minimalistyczne drzewo w formacie SVG, którego
+    "korona" (liście) ROŚNIE razem z Twoją aktualną passą treningową
+    (liczbą tygodni z rzędu z min. 1 treningiem).
+
+    Im dłuższa passa, tym WIĘCEJ "kępek liści" dorysowujemy wokół pnia -
+    ograniczamy się do maksymalnie 8 kępek, żeby drzewo nie zrobiło się
+    nieczytelnym "bałaganem" przy naprawdę długich passach (9+ tygodni
+    i tak pokazuje pełną, "dojrzałą" koronę).
+
+    Zwraca gotowy kawałek kodu HTML (SVG + CSS animacja "wzrostu"), do
+    wstawienia przez st.markdown(..., unsafe_allow_html=True).
+    """
+    # Nie pozwalamy liczbie kępek liści przekroczyć 8 - "sufit" wizualny.
+    liczba_kepek = min(liczba_tygodni_passy, 8)
+
+    # Współrzędne (x, y) i promień każdej możliwej kępki liści - ułożone
+    # "od środka korony na zewnątrz", więc kolejne kępki pojawiające się
+    # wraz z rosnącą passą sensownie "dobudowują" koronę drzewa.
+    pozycje_kepek = [
+        (100, 70, 26),   # środek korony - pojawia się jako pierwsza (1 tydzień)
+        (70, 85, 20),
+        (130, 85, 20),
+        (100, 40, 22),
+        (50, 60, 18),
+        (150, 60, 18),
+        (75, 35, 16),
+        (125, 35, 16),
+    ]
+
+    # Budujemy listę znaczników <circle> SVG - po jednym na każdą kępkę,
+    # którą "odblokowała" aktualna passa. Każdy krąg ma lekko inne
+    # opóźnienie animacji (animation-delay), żeby liście "wyrastały" jeden
+    # po drugim, a nie wszystkie naraz - bardziej organiczny efekt.
+    kregi_liasci = ""
+    for i in range(liczba_kepek):
+        x, y, promien = pozycje_kepek[i]
+        opoznienie = i * 0.12
+        kregi_liasci += (
+            f'<circle cx="{x}" cy="{y}" r="{promien}" '
+            f'fill="{KOLOR_AKCENT}" opacity="0.88" '
+            f'style="animation: wyrosnijLisc 0.5s ease-out {opoznienie}s both;" />'
+        )
+
+    return f"""
+    <div style="text-align:center; padding: 0.5rem 0 0.8rem 0;">
+        <svg viewBox="0 0 200 180" width="140" height="126" xmlns="http://www.w3.org/2000/svg">
+            <style>
+                @keyframes wyrosnijLisc {{
+                    from {{ opacity: 0; transform: scale(0); transform-origin: center; }}
+                    to   {{ opacity: 0.88; transform: scale(1); transform-origin: center; }}
+                }}
+            </style>
+            <!-- Pień drzewa - zawsze widoczny, niezależnie od długości passy. -->
+            <rect x="92" y="100" width="16" height="70" rx="4" fill="{KOLOR_AKCENT_DRUGI}" />
+            <!-- Korona drzewa - tyle kępek liści, ile tygodni trwa Twoja passa. -->
+            {kregi_liasci}
+        </svg>
+        <div style="color:{KOLOR_TEKST_PRZYGASZONY}; font-size:0.8rem; margin-top:-0.3rem;">
+            {"🌱 Zacznij swoją passę!" if liczba_tygodni_passy == 0 else f"🌳 {liczba_tygodni_passy} {'tydzień' if liczba_tygodni_passy == 1 else 'tygodnie' if 2 <= liczba_tygodni_passy <= 4 else 'tygodni'} z rzędu"}
+        </div>
+    </div>
+    """
+
+
+def pokaz_spadajace_talerze(nonce):
+    """
+    Krótka (ok. 2.5 sekundy) animacja "spadających talerzy siłowych" -
+    odpalana przy pobiciu nowego rekordu (1RM). To nasz odpowiednik
+    st.balloons(), dopasowany tematycznie do siłowni zamiast lasu.
+
+    Talerze są rysowane jako WŁASNE SVG (koło + mniejsze koło - "otwór" na
+    sztangę pośrodku), a NIE jako emoji - dzięki temu mają dokładnie taki
+    kolor, jaki chcemy (pasujący do reszty appki), zamiast zależeć od tego,
+    jak dany emoji akurat wygląda na różnych telefonach/systemach.
+
+    "nonce" działa tak samo jak w stoperze - zmienia się przy każdym nowym
+    rekordzie, więc Streamlit rysuje animację OD NOWA zamiast pokazywać
+    "zamrożoną" starą klatkę z poprzedniego rekordu.
+    """
+    # Każdy talerz: pozycja pozioma (left %), czas spadania, opóźnienie
+    # startu i promień koła (różne "wagi" talerzy - trochę urozmaicenia).
+    talerze_config = [
+        (10, 2.2, 0.0, 16), (25, 1.9, 0.3, 11), (40, 2.4, 0.1, 19),
+        (55, 2.0, 0.4, 13), (70, 2.3, 0.15, 16), (85, 2.1, 0.35, 11),
+    ]
+    talerze_html = ""
+    for i, (lewo, czas, opoznienie, promien) in enumerate(talerze_config):
+        # Mały SVG "talerz": duże koło w kolorze akcentu + małe, jaśniejsze
+        # kółko pośrodku (imitujące otwór na sztangę / logo na talerzu).
+        talerze_html += f"""
+        <svg class="talerz-{nonce}" width="{promien*2}" height="{promien*2}"
+             viewBox="0 0 {promien*2} {promien*2}"
+             style="left:{lewo}%; animation-duration:{czas}s; animation-delay:{opoznienie}s;">
+            <circle cx="{promien}" cy="{promien}" r="{promien}" fill="{KOLOR_AKCENT}" />
+            <circle cx="{promien}" cy="{promien}" r="{promien*0.35}" fill="{KOLOR_TLO}" />
+        </svg>
+        """
+
+    kod_html = f"""
+    <div style="position:relative; height:110px; overflow:hidden;">
+        <style>
+            .talerz-{nonce} {{
+                position:absolute;
+                top:-40px;
+                animation-name: spadanieTalerza-{nonce};
+                animation-timing-function: ease-in;
+                animation-fill-mode: forwards;
+            }}
+            @keyframes spadanieTalerza-{nonce} {{
+                0%   {{ transform: translateY(0) rotate(0deg); opacity: 1; }}
+                100% {{ transform: translateY(140px) rotate(320deg); opacity: 0; }}
+            }}
+        </style>
+        {talerze_html}
+    </div>
+    """
+    components.html(kod_html, height=110)
 
 
 def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
@@ -51,8 +208,8 @@ def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
         font-weight:600;
         padding:0.9rem;
         border-radius:14px;
-        background: rgba(201, 123, 91, 0.12);
-        color:#C97B5B;
+        background: rgba(139, 107, 74, 0.14);
+        color:{KOLOR_AKCENT_DRUGI};
         transition: all 0.4s ease;">
         ⏱️ Odpoczynek: <span id="stoper-liczba-{nonce}">{sekundy_startowe}</span> s
     </div>
@@ -67,8 +224,8 @@ def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
 
             if (pozostaloSekund_{nonce} <= 0) {{
                 elementKontenera_{nonce}.innerHTML = "💪 GOTOWE! Wracaj do ćwiczenia!";
-                elementKontenera_{nonce}.style.background = "rgba(107, 143, 113, 0.15)";
-                elementKontenera_{nonce}.style.color = "#6B8F71";
+                elementKontenera_{nonce}.style.background = "rgba(63, 107, 74, 0.15)";
+                elementKontenera_{nonce}.style.color = "{KOLOR_SUKCES}";
                 clearInterval(idIntervalu_{nonce});
             }} else {{
                 elementLiczby_{nonce}.innerText = pozostaloSekund_{nonce};
@@ -81,7 +238,7 @@ def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
 # ----------------------------------------------------------------------------
 # 1. KONFIGURACJA STRONY I STYLÓW CSS
 # ----------------------------------------------------------------------------
-st.set_page_config(page_title="Dziennik Treningowy", page_icon="💪", layout="centered")
+st.set_page_config(page_title="Kącik Mocy", page_icon="🌲", layout="centered")
 
 # ----------------------------------------------------------------------------
 # PALETA KOLORÓW "SKANDYNAWSKA" - jedno miejsce, z którego czerpią WSZYSTKIE
@@ -89,15 +246,17 @@ st.set_page_config(page_title="Dziennik Treningowy", page_icon="💪", layout="c
 # jeśli kiedyś zechcesz zmienić np. główny kolor akcentu, podmieniasz go
 # TYLKO tutaj, zamiast szukać po całym pliku.
 # ----------------------------------------------------------------------------
-KOLOR_TLO = "#FAF7F2"           # ciepła kremowa biel (jak papier/płótno)
-KOLOR_TLO_KARTY = "#F0EBE3"     # lekko ciemniejszy beż - tła "kart" i pól
-KOLOR_TEKST = "#2B2B2B"         # miękki węgiel zamiast czystej czerni
-KOLOR_TEKST_PRZYGASZONY = "#8A8276"  # ciepły szary - podpisy, etykiety
-KOLOR_AKCENT = "#6B8F71"        # szałwiowa zieleń - główny akcent (przyciski)
-KOLOR_AKCENT_CIEMNY = "#56765C"  # ciemniejsza zieleń - hover/cień
-KOLOR_AKCENT_DRUGI = "#C97B5B"  # stonowana terakota - stoper w trakcie, uwaga
-KOLOR_SUKCES = "#6B8F71"        # zielony - "gotowe", sukces
-KOLOR_OBRAMOWANIE = "#E2DDD4"   # cienkie, ciepłe, jasne obramowania
+# "Scandi-Forest" - pogłębiona wersja poprzedniej palety: mniej pastelowa
+# szałwia, więcej prawdziwej leśnej zieleni i kory drzew.
+KOLOR_TLO = "#F7F4ED"           # ciepła, lekko mchowa biel (jak jasny mech/papier)
+KOLOR_TLO_KARTY = "#ECE6D9"     # przygaszony, ziemisty beż - tła "kart" i pól
+KOLOR_TEKST = "#2B2B23"         # głęboka, lekko zielonkawa czerń (jak mokra kora)
+KOLOR_TEKST_PRZYGASZONY = "#827A68"  # ciepły, mchowy szary - podpisy, etykiety
+KOLOR_AKCENT = "#3F6B4A"        # głęboka leśna zieleń - główny akcent (przyciski)
+KOLOR_AKCENT_CIEMNY = "#2C4D34"  # jeszcze ciemniejsza zieleń - hover/cień
+KOLOR_AKCENT_DRUGI = "#8B6B4A"  # kora drzewa (ciepły brąz) - stoper w trakcie, uwaga
+KOLOR_SUKCES = "#3F6B4A"        # ta sama leśna zieleń - "gotowe", sukces
+KOLOR_OBRAMOWANIE = "#DDD4C0"   # cienkie, ziemiste, jasne obramowania
 
 st.markdown(
     f"""
@@ -115,6 +274,26 @@ st.markdown(
             padding-top: 3.5rem !important;
             padding-bottom: 3rem;
             max-width: 600px;
+            /* NOWOŚĆ: płynne pojawianie się całej treści strony. Streamlit
+               tworzy ten element OD NOWA przy każdej zmianie ekranu (bo cały
+               skrypt wykonuje się ponownie), więc ta animacja odpala się
+               automatycznie za każdym razem, gdy przechodzisz między
+               ekranami - appka przestaje "migać" i zaczyna płynnie "wpływać". */
+            animation: wplyniecieTresci 0.35s ease-out;
+        }}
+
+        /* Definicja samej animacji "wpłynięcia": zaczynamy lekko przezroczyści
+           i przesunięci w dół (opacity 0, translateY 8px), a kończymy w pełni
+           widoczni na swoim docelowym miejscu (opacity 1, translateY 0). */
+        @keyframes wplyniecieTresci {{
+            from {{
+                opacity: 0;
+                transform: translateY(8px);
+            }}
+            to {{
+                opacity: 1;
+                transform: translateY(0);
+            }}
         }}
 
         /* Nagłówki - lżejsza waga czcionki i więcej "oddechu" wygląda
@@ -150,6 +329,27 @@ st.markdown(
         }}
         div.stButton > button[kind="primary"]:hover {{
             background-color: {KOLOR_AKCENT_CIEMNY};
+        }}
+
+        /* --- NOWOŚĆ: "oddychający" (pulsujący) przycisk NOWY TRENING -----
+           Streamlit nie pozwala dać przyciskowi własnej klasy CSS wprost,
+           więc używamy triku: tuż PRZED tym jednym przyciskiem wstawiamy w
+           app.py niewidoczny znacznik <div id="puls-marker">, a tutaj w
+           CSS mówimy "znajdź przycisk zaraz PO tym znaczniku" (selektor
+           sąsiada "+"). Dzięki temu pulsowanie dotyczy TYLKO tego jednego
+           przycisku, a nie wszystkich przycisków "primary" w appce. */
+        #puls-marker + div.stButton > button {{
+            animation: oddechPrzycisku 2.2s ease-in-out infinite;
+        }}
+        @keyframes oddechPrzycisku {{
+            0%, 100% {{
+                box-shadow: 0 2px 8px rgba(63, 107, 74, 0.35);
+                transform: scale(1);
+            }}
+            50% {{
+                box-shadow: 0 2px 18px rgba(63, 107, 74, 0.55);
+                transform: scale(1.015);
+            }}
         }}
 
         /* --- POLA LICZBOWE (ciężar / powtórzenia) ------------------------ */
@@ -298,6 +498,15 @@ if "page" not in st.session_state:
                 st.session_state.current_day_key = zapisany_dzien_klucz
                 st.session_state.current_exercise = cwiczenie
                 st.session_state.page = "active_exercise"
+
+    elif zapisana_strona == "session_summary" and zapisany_dzien_klucz:
+        dzien = next(
+            (d for d in st.session_state.workout_days if d["day_key"] == zapisany_dzien_klucz),
+            None,
+        )
+        if dzien:
+            st.session_state.current_day_key = zapisany_dzien_klucz
+            st.session_state.page = "session_summary"
     # W każdym innym przypadku (np. puste query params przy pierwszej
     # wizycie) zostajemy przy bezpiecznej wartości domyślnej "menu".
 
@@ -313,6 +522,15 @@ if "stoper_widoczny" not in st.session_state:
 # narysowanie stopera OD NOWA (patrz komentarz przy pokaz_stoper_odpoczynku()).
 if "stoper_nonce" not in st.session_state:
     st.session_state.stoper_nonce = 0
+
+# --- NOWOŚĆ: stan animacji "spadających talerzy" przy nowym rekordzie 1RM -----
+# Działa dokładnie tym samym mechanizmem co stoper powyżej - "widoczny"
+# mówi CZY rysować, "nonce" wymusza narysowanie OD NOWA (restart animacji).
+if "talerze_widoczne" not in st.session_state:
+    st.session_state.talerze_widoczne = False
+
+if "talerze_nonce" not in st.session_state:
+    st.session_state.talerze_nonce = 0
 
 if "edit_mode_ex" not in st.session_state:
     st.session_state.edit_mode_ex = False
@@ -373,15 +591,28 @@ def go_to_stats():
     st.query_params["page"] = "stats"
 
 
+def go_to_session_summary():
+    st.session_state.page = "session_summary"
+    st.query_params.clear()
+    st.query_params["page"] = "session_summary"
+    # Zapamiętujemy, jakiego dnia treningowego dotyczy to podsumowanie -
+    # bierzemy to z aktualnie wybranego dnia (current_day_key).
+    st.query_params["day"] = st.session_state.current_day_key
+
+
 # ----------------------------------------------------------------------------
 # 3. WIDOKI APLIKACJI
 # ----------------------------------------------------------------------------
 
 # --- EKRAN 0: MENU GŁÓWNE ---
 if st.session_state.page == "menu":
-    st.title("💪 Twój Dziennik")
+    st.title("🌲 Kącik Mocy")
+    st.caption("Twój leśny kącik siły")
     st.write("Wybierz, co robimy dzisiaj:")
 
+    # Niewidoczny znacznik - patrz duży komentarz przy "#puls-marker" w CSS
+    # wyżej. Musi być TUŻ przed przyciskiem, który ma pulsować.
+    st.markdown('<div id="puls-marker"></div>', unsafe_allow_html=True)
     if st.button("🔥 NOWY TRENING", type="primary", key="menu_new_workout"):
         go_to_workout_day_selection()
         st.rerun()
@@ -411,6 +642,17 @@ if st.session_state.page == "menu":
         # ":,.0f" formatuje liczbę z separatorem tysięcy i bez miejsc po
         # przecinku (np. 12450 -> "12,450") - czytelniej dla dużych liczb.
         kol_stat3.metric("Objętość", f"{statystyki['laczna_objetosc']:,.0f} kg")
+
+    # ------------------------------------------------------------------
+    # NOWOŚĆ: ROSNĄCE DRZEWO PASSY
+    # ------------------------------------------------------------------
+    # Pokazujemy je zawsze (nawet przy passie = 0), żeby zachęcić do
+    # zaczęcia - wtedy appka pokazuje zamiast drzewa małą "sadzonkę" (🌱).
+    info_passy_menu = pobierz_info_o_passie()
+    st.markdown(
+        narysuj_drzewo_passy(info_passy_menu["aktualna_passa"]),
+        unsafe_allow_html=True,
+    )
 
     # ------------------------------------------------------------------
     # NOWOŚĆ: WAGA CIAŁA W CZASIE
@@ -715,6 +957,17 @@ elif st.session_state.page == "exercise_list":
                     st.session_state.editing_ex_key = None
                     st.rerun()
 
+        # ------------------------------------------------------------------
+        # NOWOŚĆ: Przycisk kończący CAŁY trening (nie pojedyncze ćwiczenie).
+        # Prowadzi do nowego ekranu "session_summary" z podsumowaniem całej
+        # dzisiejszej sesji (objętość, liczba ćwiczeń/serii, porównanie do
+        # poprzedniego treningu TEGO SAMEGO typu).
+        # ------------------------------------------------------------------
+        st.markdown("---")
+        if st.button("🏁 Zakończ trening i zobacz podsumowanie", key="btn_zakoncz_trening"):
+            go_to_session_summary()
+            st.rerun()
+
 
 # --- EKRAN 3: AKTYWNE ĆWICZENIE ---
 elif st.session_state.page == "active_exercise":
@@ -730,9 +983,7 @@ elif st.session_state.page == "active_exercise":
 
     st.title(ex_name)
 
-    image_path = ex.get("image", "")
-    if image_path and os.path.exists(image_path):
-        st.image(image_path, use_container_width=True)
+    pokaz_media_cwiczenia(ex.get("image", ""))
 
     if ex.get("note"):
         st.info(ex["note"])
@@ -810,11 +1061,32 @@ elif st.session_state.page == "active_exercise":
         # ponownie - to też jest sposób na EDYCJĘ już zapisanej serii,
         # bo save_single_set nadpisuje poprzedni wpis tego samego numeru.
         if col_zapisz.button(f"💾 Zapisz {i}", key=f"save_set_{ex['key']}_{i}"):
+            # WAŻNE: sprawdzamy dotychczasowy rekord PRZED zapisem nowej
+            # serii - inaczej porównywalibyśmy nowy wynik "sam z sobą".
+            poprzedni_rekord_1rm = pobierz_najlepszy_1rm_dla_cwiczenia(ex_name)
+
             zapisano = save_single_set(
                 TODAY, current_day_data["day_key"], ex_name, i, weight, reps
             )
             if zapisano:
-                st.toast(f"Zapisano serię {i}! 💪", icon="✅")
+                nowy_1rm = weight * (1 + reps / 30) if weight > 0 and reps > 0 else 0
+
+                # To "nowy rekord" TYLKO jeśli wcześniej istniał jakikolwiek
+                # wynik (żeby pierwsza w życiu seria nie była "rekordem")
+                # I nowy wynik faktycznie go pobił.
+                czy_nowy_rekord = (
+                    poprzedni_rekord_1rm is not None and nowy_1rm > poprzedni_rekord_1rm
+                )
+
+                if czy_nowy_rekord:
+                    st.toast(f"🏆 NOWY REKORD! Szacowany 1RM: {nowy_1rm:.1f} kg", icon="🏆")
+                    # Uruchamiamy animację spadających talerzy (nasz siłowy
+                    # odpowiednik confetti) - patrz pokaz_spadajace_talerze().
+                    st.session_state.talerze_widoczne = True
+                    st.session_state.talerze_nonce += 1
+                else:
+                    st.toast(f"Zapisano serię {i}! 💪", icon="✅")
+
                 # Uruchamiamy (albo restartujemy, jeśli już trwał) stoper
                 # odpoczynku - patrz pokaz_stoper_odpoczynku() na górze pliku.
                 st.session_state.stoper_widoczny = True
@@ -844,6 +1116,14 @@ elif st.session_state.page == "active_exercise":
     if st.button("➕ Dodaj serię", key="add_set_btn"):
         st.session_state[sets_count_key] += 1
         st.rerun()
+
+    # --- Spadające talerze - krótka animacja przy nowym rekordzie 1RM --------
+    if st.session_state.talerze_widoczne:
+        pokaz_spadajace_talerze(st.session_state.talerze_nonce)
+        # Animacja sama "wygasza się" wizualnie po ~2.5s, ale flagę i tak
+        # gasimy, żeby przy KOLEJNYM zwykłym odświeżeniu strony (np. zmianie
+        # innego pola) nie pokazywała się ona w kółko od nowa.
+        st.session_state.talerze_widoczne = False
 
     # --- Stoper odpoczynku - pokazuje się po zapisaniu dowolnej serii -------
     if st.session_state.stoper_widoczny:
@@ -990,3 +1270,75 @@ elif st.session_state.page == "stats":
         kol_r1.metric("Współczynnik r", f"{r:.3f}")
         kol_r2.metric("Wspólne tygodnie", korelacja["liczba_wspolnych_tygodni"])
         st.caption(f"Interpretacja: korelacja **{opis} {kierunek}**.")
+
+
+# --- EKRAN 6: PODSUMOWANIE TRENINGU ("capstone" po zakończeniu sesji) ---
+elif st.session_state.page == "session_summary":
+    dzien_podsumowania = next(
+        (d for d in st.session_state.workout_days if d["day_key"] == st.session_state.current_day_key),
+        None,
+    )
+    etykieta_dnia = dzien_podsumowania["title"] if dzien_podsumowania else st.session_state.current_day_key
+
+    st.title("🏁 Trening zakończony!")
+    st.subheader(etykieta_dnia)
+
+    podsumowanie = pobierz_podsumowanie_sesji(TODAY)
+
+    if podsumowanie["liczba_serii"] == 0:
+        # User kliknął "Zakończ trening", nic dziś jeszcze nie zapisując -
+        # pokazujemy łagodny komunikat zamiast pustego, dołującego ekranu.
+        st.info("Nie zapisałeś dziś jeszcze żadnej serii - wróć i dodaj swoje wyniki!")
+    else:
+        kol_pods1, kol_pods2, kol_pods3 = st.columns(3)
+        kol_pods1.metric("Ćwiczenia", podsumowanie["liczba_cwiczen"])
+        kol_pods2.metric("Serie", podsumowanie["liczba_serii"])
+        kol_pods3.metric("Objętość", f"{podsumowanie['objetosc']:,.0f} kg")
+
+        # --- Porównanie do poprzedniego treningu TEGO SAMEGO typu -----------
+        poprzednia_sesja = pobierz_poprzednia_sesje_tego_typu(
+            st.session_state.current_day_key, TODAY
+        )
+        st.write("")
+        if poprzednia_sesja is None:
+            st.success("🎉 To Twój PIERWSZY zapisany trening tego typu - od czegoś trzeba zacząć!")
+        else:
+            roznica = podsumowanie["objetosc"] - poprzednia_sesja["objetosc"]
+            data_poprz_ladna = datetime.strptime(poprzednia_sesja["data"], "%Y-%m-%d").strftime("%d.%m.%Y")
+
+            if roznica > 0:
+                st.success(
+                    f"📈 **{roznica:,.0f} kg więcej** objętości niż poprzednim razem "
+                    f"({data_poprz_ladna}: {poprzednia_sesja['objetosc']:,.0f} kg)."
+                )
+            elif roznica < 0:
+                st.warning(
+                    f"📉 {abs(roznica):,.0f} kg mniej objętości niż poprzednim razem "
+                    f"({data_poprz_ladna}: {poprzednia_sesja['objetosc']:,.0f} kg). "
+                    f"Bywa - liczy się regularność, nie każdy trening musi być rekordem."
+                )
+            else:
+                st.info(
+                    f"🔁 Dokładnie taka sama objętość jak poprzednim razem "
+                    f"({data_poprz_ladna}: {poprzednia_sesja['objetosc']:,.0f} kg)."
+                )
+
+        # --- Lista ćwiczeń wykonanych dzisiaj --------------------------------
+        st.write("")
+        st.markdown("##### Co dziś zrobiłeś:")
+        for nazwa_cw in get_exercises_for_session(TODAY):
+            serie_cw = get_sets_for_date(nazwa_cw, TODAY)
+            st.caption(f"• **{nazwa_cw}** — {len(serie_cw)} {'seria' if len(serie_cw) == 1 else 'serie' if 2 <= len(serie_cw) <= 4 else 'serii'}")
+
+        # --- Drzewo passy - mały, motywujący akcent na koniec ---------------
+        st.write("")
+        info_passy_podsum = pobierz_info_o_passie()
+        st.markdown(
+            narysuj_drzewo_passy(info_passy_podsum["aktualna_passa"]),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+    if st.button("🏠 Wróć do Menu Głównego", type="primary", key="summary_to_menu"):
+        go_to_menu()
+        st.rerun()

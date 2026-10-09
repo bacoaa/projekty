@@ -885,3 +885,93 @@ def pobierz_korelacje_waga_objetosc():
 
     r = kowariancja / (odchylenie_x * odchylenie_y)
     return {"r": r, "liczba_wspolnych_tygodni": n}
+
+
+def pobierz_najlepszy_1rm_dla_cwiczenia(exercise_name):
+    """
+    Zwraca NAJLEPSZY dotychczas zanotowany szacowany 1RM (wzór Epleya) dla
+    PODANEGO ćwiczenia, jako samą liczbę (float) - albo None, jeśli to
+    ćwiczenie nie ma jeszcze ŻADNEJ historii.
+
+    Używane do wykrywania "czy ta nowo zapisywana seria to nowy rekord?" -
+    porównujemy jej 1RM z tym, co ta funkcja zwróci SPRZED zapisu nowej serii.
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute(
+            "SELECT weight, reps FROM workout_sets WHERE exercise_name = ?",
+            (exercise_name,),
+        ).fetchall()
+
+    if not wiersze:
+        return None
+
+    najlepszy = 0.0
+    for w in wiersze:
+        if w["weight"] <= 0 or w["reps"] <= 0:
+            continue
+        rm = w["weight"] * (1 + w["reps"] / 30)
+        najlepszy = max(najlepszy, rm)
+
+    return najlepszy if najlepszy > 0 else None
+
+
+# ----------------------------------------------------------------------------
+# PODSUMOWANIE SESJI TRENINGOWEJ (ekran "Zakończ trening")
+# ----------------------------------------------------------------------------
+def pobierz_podsumowanie_sesji(date_str):
+    """
+    Zwraca krótkie podsumowanie JEDNEJ konkretnej sesji treningowej
+    (wszystkiego, co zapisano w danym dniu): łączną objętość, liczbę
+    różnych wykonanych ćwiczeń i łączną liczbę zapisanych serii.
+
+    Zwraca: {"objetosc": float, "liczba_cwiczen": int, "liczba_serii": int}
+    """
+    with get_connection() as conn:
+        wiersz = conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(weight * reps), 0) AS objetosc,
+                COUNT(DISTINCT exercise_name) AS liczba_cwiczen,
+                COUNT(*) AS liczba_serii
+            FROM workout_sets
+            WHERE date = ?
+            """,
+            (date_str,),
+        ).fetchone()
+        return {
+            "objetosc": wiersz["objetosc"],
+            "liczba_cwiczen": wiersz["liczba_cwiczen"],
+            "liczba_serii": wiersz["liczba_serii"],
+        }
+
+
+def pobierz_poprzednia_sesje_tego_typu(day_tab, aktualna_data):
+    """
+    Znajduje NAJBLIŻSZĄ WCZEŚNIEJSZĄ sesję TEGO SAMEGO typu dnia
+    treningowego (np. poprzedni trening PULL sprzed obecnego) i zwraca
+    jej datę oraz łączną objętość - do porównania "czy dziś było ciężej
+    niż ostatnim razem".
+
+    Zwraca {"data": str, "objetosc": float} albo None, jeśli to Twój
+    PIERWSZY trening tego typu (nie ma z czym porównać).
+    """
+    with get_connection() as conn:
+        poprzednia = conn.execute(
+            """
+            SELECT DISTINCT date FROM workout_sets
+            WHERE day_tab = ? AND date < ?
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            (day_tab, aktualna_data),
+        ).fetchone()
+
+        if poprzednia is None:
+            return None
+
+        data_poprzedniej = poprzednia["date"]
+        wynik = conn.execute(
+            "SELECT COALESCE(SUM(weight * reps), 0) AS objetosc FROM workout_sets WHERE date = ?",
+            (data_poprzedniej,),
+        ).fetchone()
+        return {"data": data_poprzedniej, "objetosc": wynik["objetosc"]}
