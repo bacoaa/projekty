@@ -6,9 +6,10 @@
 # ustawia też rzeczy, których samym CSS nie da się łatwo "dosięgnąć"
 # (np. kolor zaznaczenia w polach, suwaki, domyślne tło widgetów).
 #
-# PALETA: "styl skandynawski" - ciepłe, naturalne, stonowane barwy zamiast
-# ostrej czerni/bieli: kremowe tło (jak papier), szałwiowa zieleń jako
-# główny akcent, miękki węgiel zamiast czystej czerni w tekście.
+# PALETA: "Scandi-Forest" - stonowane, leśne barwy: mchowa biel jako tło,
+# głęboka leśna zieleń jako główny akcent, ciemny, lekko zielonkawy tekst
+# zamiast czystej czerni. Dopasowana do kolorów w KOLOR_* w app.py - jeśli
+# zmieniasz jedno, zmień też drugie, żeby appka była spójna.
 #
 # WAŻNE: ten plik MUSI być w folderze dokładnie o nazwie ".streamlit"
 # (z kropką na początku!) w głównym katalogu Twojego repo na GitHubie,
@@ -18,16 +19,16 @@
 base = "light"
 
 # Główny kolor akcentu - przyciski "primary", suwaki, zaznaczenia, focus.
-primaryColor = "#6B8F71"
+primaryColor = "#3F6B4A"
 
-# Tło głównej treści strony - ciepły, kremowy odcień zamiast ostrej bieli.
-backgroundColor = "#FAF7F2"
+# Tło głównej treści strony - ciepła, mchowa biel.
+backgroundColor = "#F7F4ED"
 
 # Tło "drugoplanowe" - używane przez expander, pola input, karty.
-secondaryBackgroundColor = "#F0EBE3"
+secondaryBackgroundColor = "#ECE6D9"
 
-# Kolor tekstu - miękki węgiel (ciemny, ale nie czysta czerń #000).
-textColor = "#2B2B2B"
+# Kolor tekstu - głęboka, lekko zielonkawa czerń (nie czysta czerń #000).
+textColor = "#2B2B23"
 
 # Rodzina czcionek - "sans serif" każe Streamlit użyć systemowej czcionki
 # bezszeryfowej jako fallback; właściwą, "ładniejszą" czcionkę (Inter)
