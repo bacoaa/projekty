@@ -36,6 +36,14 @@ import tempfile
 # "3 tygodnie wstecz").
 from datetime import datetime, timedelta
 
+# "csv" - wbudowana biblioteka Pythona do budowania plików CSV (dokładnie
+# takich, jakie otwiera Excel / Arkusze Google) - do eksportu danych.
+import csv
+
+# "io" - pozwala "udawać plik" w pamięci (StringIO/BytesIO) zamiast
+# faktycznie zapisywać coś na dysk, zanim oddamy to do pobrania w app.py.
+import io
+
 # "contextmanager" pozwala nam napisać własną funkcję, która działa
 # z instrukcją "with ... as ...:" - dzięki temu połączenie z bazą zawsze
 # zostanie poprawnie zamknięte, nawet gdyby coś się wysypało po drodze.
@@ -107,6 +115,25 @@ def init_db():
         # "commit()" zatwierdza zmiany w bazie - bez tego CREATE TABLE
         # mogłoby się "nie zapisać" na stałe.
         conn.commit()
+
+        # ---------------------------------------------------------------
+        # MIGRACJA: dokładamy kolumnę "rpe" (subiektywne odczucie wysiłku,
+        # skala 1-10) do istniejącej tabeli, jeśli jeszcze jej tam nie ma -
+        # dotyczy baz utworzonych PRZED wprowadzeniem tej funkcji. Nowe
+        # bazy dostają tę kolumnę od razu w CREATE TABLE powyżej... a
+        # właściwie NIE dostają - dla prostoty utrzymujemy JEDNO miejsce
+        # (ten blok ALTER TABLE), które działa identycznie dla zupełnie
+        # nowej bazy i dla starej - "IF NOT EXISTS" sprawdzone ręcznie
+        # przez PRAGMA, bo SQLite nie ma "ALTER TABLE ADD COLUMN IF NOT EXISTS".
+        # ---------------------------------------------------------------
+        istniejace_kolumny_ws = [
+            w["name"] for w in conn.execute("PRAGMA table_info(workout_sets)").fetchall()
+        ]
+        if "rpe" not in istniejace_kolumny_ws:
+            # Kolumna bez NOT NULL - RPE jest OPCJONALNE, większość serii
+            # może go w ogóle nie mieć (wartość NULL w bazie = brak danych).
+            conn.execute("ALTER TABLE workout_sets ADD COLUMN rpe INTEGER")
+            conn.commit()
 
         # ---------------------------------------------------------------
         # NOWOŚĆ: druga, malutka tabela "app_state" - to prosty magazyn
@@ -247,11 +274,10 @@ def save_exercise_sets(date_str, day_tab, exercise_name, sets_data):
         return len(rows)
 
 
-def save_single_set(date_str, day_tab, exercise_name, set_number, weight, reps):
+def save_single_set(date_str, day_tab, exercise_name, set_number, weight, reps, rpe=None):
     """
-    NOWOŚĆ: zapisuje JEDNĄ, konkretną serię od razu po jej wpisaniu -
-    zamiast czekać, aż user skończy CAŁE ćwiczenie i kliknie duży przycisk
-    na dole.
+    Zapisuje JEDNĄ, konkretną serię od razu po jej wpisaniu - zamiast
+    czekać, aż user skończy CAŁE ćwiczenie i kliknie duży przycisk na dole.
 
     DLACZEGO TO WAŻNE? Bo jeśli appka na telefonie przeładuje się w
     trakcie treningu (np. po powrocie z innej aplikacji), to WSZYSTKO, co
@@ -263,6 +289,12 @@ def save_single_set(date_str, day_tab, exercise_name, set_number, weight, reps):
     wstawia WSZYSTKIE serie danego ćwiczenia na raz), ta funkcja rusza
     TYLKO wiersz o konkretnym numerze serii - inne, już zapisane serie
     tego ćwiczenia zostają nietknięte.
+
+    NOWOŚĆ: parametr "rpe" (Rate of Perceived Exertion, skala 1-10) -
+    subiektywne "jak ciężko to było". Jest OPCJONALNY (domyślnie None),
+    więc wszystkie miejsca w kodzie, które wołały tę funkcję ZANIM
+    dodaliśmy RPE, dalej działają bez żadnych zmian - po prostu nie
+    przekazują tego argumentu, i trafia do bazy jako NULL (brak danych).
 
     Zwraca True, jeśli faktycznie coś zapisano (weight>0 lub reps>0),
     False jeśli pola były puste (0 i 0) - wtedy nic nie wstawiamy.
@@ -281,13 +313,17 @@ def save_single_set(date_str, day_tab, exercise_name, set_number, weight, reps):
 
         if weight > 0 or reps > 0:
             now = datetime.now().isoformat()
+            # "rpe if rpe and rpe > 0 else None" - traktujemy 0 (albo brak
+            # wartości) jako "user nie podał RPE", więc zapisujemy czyste
+            # NULL zamiast mylącego zera (0 na skali 1-10 nie ma sensu).
+            rpe_do_zapisu = rpe if rpe and rpe > 0 else None
             conn.execute(
                 """
                 INSERT INTO workout_sets
-                    (date, day_tab, exercise_name, set_number, weight, reps, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (date, day_tab, exercise_name, set_number, weight, reps, rpe, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (date_str, day_tab, exercise_name, set_number, weight, reps, now),
+                (date_str, day_tab, exercise_name, set_number, weight, reps, rpe_do_zapisu, now),
             )
             conn.commit()
             return True
@@ -975,3 +1011,183 @@ def pobierz_poprzednia_sesje_tego_typu(day_tab, aktualna_data):
             (data_poprzedniej,),
         ).fetchone()
         return {"data": data_poprzedniej, "objetosc": wynik["objetosc"]}
+
+
+# ----------------------------------------------------------------------------
+# RPE (Rate of Perceived Exertion - subiektywne odczucie wysiłku, skala 1-10)
+# ----------------------------------------------------------------------------
+def get_rpe_for_date(exercise_name, date_str):
+    """
+    Zwraca RPE zapisane dla poszczególnych serii danego ćwiczenia w danym
+    dniu - jako słownik {numer_serii: rpe}. Serie BEZ podanego RPE (NULL
+    w bazie) w ogóle nie pojawiają się w tym słowniku - używaj .get(i)
+    w app.py, żeby bezpiecznie obsłużyć brak wartości.
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute(
+            """
+            SELECT set_number, rpe FROM workout_sets
+            WHERE exercise_name = ? AND date = ? AND rpe IS NOT NULL
+            """,
+            (exercise_name, date_str),
+        ).fetchall()
+        return {w["set_number"]: w["rpe"] for w in wiersze}
+
+
+def pobierz_tygodniowe_rpe():
+    """
+    Zwraca ŚREDNIE RPE zgrupowane po tygodniu kalendarzowym (ten sam
+    "klucz tygodnia" - poniedziałek - co w pobierz_tygodniowa_objetosc()),
+    żeby móc narysować trend "czy treningi subiektywnie stają się
+    cięższe/lżejsze z czasem". Pomija całkowicie serie bez podanego RPE.
+
+    Format: [{"tydzien": "2026-08-25", "srednie_rpe": 7.2}, ...]
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute(
+            "SELECT date, rpe FROM workout_sets WHERE rpe IS NOT NULL ORDER BY date ASC"
+        ).fetchall()
+
+    rpe_wg_tygodnia = {}
+    for w in wiersze:
+        data_obj = datetime.strptime(w["date"], "%Y-%m-%d")
+        klucz = _poniedzialek_tygodnia(data_obj).strftime("%Y-%m-%d")
+        rpe_wg_tygodnia.setdefault(klucz, []).append(w["rpe"])
+
+    return [
+        {"tydzien": tydz, "srednie_rpe": sum(wartosci) / len(wartosci)}
+        for tydz, wartosci in sorted(rpe_wg_tygodnia.items())
+    ]
+
+
+# ----------------------------------------------------------------------------
+# DANE DZIENNE (do heatmapy kalendarzowej - "jak GitHub contribution graph")
+# ----------------------------------------------------------------------------
+def pobierz_dzienna_objetosc():
+    """
+    Zwraca łączną objętość treningową dla KAŻDEGO DNIA (nie tygodnia!), w
+    którym cokolwiek zapisano - do narysowania heatmapy kalendarzowej w
+    app.py (jeden kwadracik = jeden dzień, kolor = ile "ważyła" ta sesja).
+
+    Format: {"2026-08-25": 1240.0, "2026-08-27": 890.0, ...}
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute(
+            """
+            SELECT date, SUM(weight * reps) AS objetosc
+            FROM workout_sets
+            GROUP BY date
+            """
+        ).fetchall()
+        return {w["date"]: w["objetosc"] for w in wiersze}
+
+
+# ----------------------------------------------------------------------------
+# SUGESTIA CELU NA NASTĘPNY TRENING (prosty "progressive overload" coach)
+# ----------------------------------------------------------------------------
+def pobierz_sugestie_celu(exercise_name):
+    """
+    Na podstawie NAJLEPSZEJ serii (wg objętości: ciężar × powtórzenia) z
+    OSTATNIEGO dnia, w którym wykonano to ćwiczenie, sugeruje DWIE
+    klasyczne ścieżki progresji ("progressive overload"):
+        A) ten sam ciężar + 1 powtórzenie więcej
+        B) ten sam... a właściwie trochę WIĘKSZY ciężar (+2.5 kg), tyle
+           samo powtórzeń
+
+    Zwraca None, jeśli to ćwiczenie nie ma jeszcze żadnej historii.
+    Inaczej zwraca:
+        {
+            "poprzednia_data": "2026-08-27",
+            "poprzedni_wynik": "42.5 kg × 8",
+            "opcja_a": "42.5 kg × 9",
+            "opcja_b": "45.0 kg × 8",
+        }
+    """
+    with get_connection() as conn:
+        # Szukamy NAJNOWSZEJ daty, w której to ćwiczenie w ogóle wystąpiło.
+        ostatnia_data_wiersz = conn.execute(
+            "SELECT MAX(date) AS data FROM workout_sets WHERE exercise_name = ?",
+            (exercise_name,),
+        ).fetchone()
+        ostatnia_data = ostatnia_data_wiersz["data"] if ostatnia_data_wiersz else None
+
+        if ostatnia_data is None:
+            return None
+
+        # Pobieramy WSZYSTKIE serie z tego konkretnego, ostatniego dnia.
+        serie = conn.execute(
+            "SELECT weight, reps FROM workout_sets WHERE exercise_name = ? AND date = ?",
+            (exercise_name, ostatnia_data),
+        ).fetchall()
+
+    if not serie:
+        return None
+
+    # "Najlepsza" seria = ta z największą objętością (waga × powtórzenia) -
+    # to ZWYKLE ta, którą warto spróbować pobić następnym razem.
+    najlepsza = max(serie, key=lambda s: s["weight"] * s["reps"])
+    waga = najlepsza["weight"]
+    powt = najlepsza["reps"]
+
+    return {
+        "poprzednia_data": ostatnia_data,
+        "poprzedni_wynik": f"{waga:g} kg × {powt}",
+        "opcja_a": f"{waga:g} kg × {powt + 1}",
+        "opcja_b": f"{waga + 2.5:g} kg × {powt}",
+    }
+
+
+# ----------------------------------------------------------------------------
+# EKSPORT DO CSV (pliki otwieralne w Excelu / Arkuszach Google)
+# ----------------------------------------------------------------------------
+def eksportuj_treningi_jako_csv():
+    """
+    Buduje plik CSV z CAŁĄ historią treningów (jeden wiersz = jedna
+    seria), gotowy do pobrania przyciskiem st.download_button w app.py.
+
+    Zwraca GOTOWE BAJTY pliku (zakodowane jako "utf-8-sig" - to WAŻNE:
+    zwykłe "utf-8" sprawia, że Excel błędnie wyświetla polskie znaki typu
+    "ą", "ę"; "utf-8-sig" dokłada niewidoczny znacznik BOM na początku
+    pliku, po którym Excel PRAWIDŁOWO rozpoznaje kodowanie).
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute(
+            """
+            SELECT date, day_tab, exercise_name, set_number, weight, reps, rpe
+            FROM workout_sets
+            ORDER BY date ASC, id ASC
+            """
+        ).fetchall()
+
+    # io.StringIO() to "plik w pamięci" - csv.writer zapisuje do niego
+    # dokładnie tak, jakby to był prawdziwy plik na dysku.
+    bufor_tekstowy = io.StringIO()
+    writer = csv.writer(bufor_tekstowy)
+
+    # Nagłówek kolumn - pierwszy wiersz pliku CSV.
+    writer.writerow(["data", "dzien_treningowy", "cwiczenie", "numer_serii", "ciezar_kg", "powtorzenia", "rpe"])
+
+    for w in wiersze:
+        writer.writerow([
+            w["date"], w["day_tab"], w["exercise_name"], w["set_number"],
+            w["weight"], w["reps"], w["rpe"] if w["rpe"] is not None else "",
+        ])
+
+    # Zamieniamy tekst na bajty w kodowaniu "utf-8-sig" (patrz docstring wyżej).
+    return bufor_tekstowy.getvalue().encode("utf-8-sig")
+
+
+def eksportuj_wage_ciala_jako_csv():
+    """
+    Jak wyżej, ale dla historii wagi ciała - osobny, mniejszy plik CSV.
+    """
+    with get_connection() as conn:
+        wiersze = conn.execute("SELECT date, weight FROM body_weight ORDER BY date ASC").fetchall()
+
+    bufor_tekstowy = io.StringIO()
+    writer = csv.writer(bufor_tekstowy)
+    writer.writerow(["data", "waga_kg"])
+    for w in wiersze:
+        writer.writerow([w["date"], w["weight"]])
+
+    return bufor_tekstowy.getvalue().encode("utf-8-sig")

@@ -3,7 +3,7 @@
 # ============================================================================
 
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta
 import copy
 import os
 
@@ -24,6 +24,10 @@ from database import (
     pobierz_rekordy_osobiste, pobierz_info_o_passie, pobierz_korelacje_waga_objetosc,
     pobierz_najlepszy_1rm_dla_cwiczenia,
     pobierz_podsumowanie_sesji, pobierz_poprzednia_sesje_tego_typu,
+    get_rpe_for_date, pobierz_tygodniowe_rpe,
+    pobierz_dzienna_objetosc,
+    pobierz_sugestie_celu,
+    eksportuj_treningi_jako_csv, eksportuj_wage_ciala_jako_csv,
 )
 from exercises_config import WORKOUT_DAYS, MAX_SETS
 
@@ -187,6 +191,86 @@ def pokaz_spadajace_talerze(nonce):
     </div>
     """
     components.html(kod_html, height=110)
+
+
+def narysuj_heatmape_treningowa(dane_dzienne, tygodnie_wstecz=20):
+    """
+    Buduje kalendarzową "heatmapę" regularności treningów w stylu wykresu
+    kontrybucji na GitHubie: siatka małych kwadracików, jeden kwadracik =
+    jeden dzień, im CIEMNIEJSZY kolor, tym WIĘKSZA była tego dnia objętość
+    treningowa. Puste (białe/jasne) kwadraciki = dni bez treningu.
+
+    Parametry:
+        dane_dzienne     - słownik {"RRRR-MM-DD": objetosc} z database.py
+        tygodnie_wstecz  - ile tygodni pokazać (licząc od dziś wstecz);
+                           domyślnie 20 tygodni (~4,5 miesiąca) - tyle
+                           zwykle mieści się czytelnie na ekranie telefonu
+                           przy przewijaniu w bok
+
+    Zwraca gotowy HTML (do wstawienia przez st.markdown(unsafe_allow_html=True)).
+    Siatka jest przewijalna w poziomie (overflow-x: auto), więc nawet na
+    wąskim ekranie telefonu nic się nie "zgniata".
+    """
+    dzis = datetime.now()
+    # Zaczynamy od poniedziałku sprzed "tygodnie_wstecz" tygodni - dzięki
+    # temu siatka zawsze kończy się na BIEŻĄCYM tygodniu.
+    poniedzialek_startowy = _poniedzialek_tygodnia_lokalny(dzis) - timedelta(weeks=tygodnie_wstecz - 1)
+
+    max_objetosc = max(dane_dzienne.values()) if dane_dzienne else 0
+
+    def kolor_dla_objetosci(objetosc):
+        """4-stopniowa skala koloru - od bardzo jasnego (mało) do pełnego
+        koloru akcentu (najcięższy dzień w całej Twojej historii)."""
+        if objetosc <= 0 or max_objetosc <= 0:
+            return KOLOR_TLO_KARTY
+        udzial = objetosc / max_objetosc
+        if udzial < 0.25:
+            return "#C9D6C5"
+        if udzial < 0.5:
+            return "#9CB497"
+        if udzial < 0.75:
+            return "#6E9269"
+        return KOLOR_AKCENT
+
+    # Budujemy siatkę KOLUMNA PO KOLUMNIE (każda kolumna = jeden tydzień,
+    # 7 kwadracików od poniedziałku do niedzieli, ułożonych pionowo) -
+    # dokładnie jak na GitHubie.
+    kolumny_html = ""
+    dzien_kursor = poniedzialek_startowy
+    for _ in range(tygodnie_wstecz):
+        komorki_html = ""
+        for _ in range(7):
+            data_str = dzien_kursor.strftime("%Y-%m-%d")
+            objetosc_dnia = dane_dzienne.get(data_str, 0)
+            kolor = kolor_dla_objetosci(objetosc_dnia)
+            # "title" to dymek z podpowiedzią widoczny po najechaniu myszką
+            # (na telefonie: po przytrzymaniu palcem) - pokazuje dokładną datę i objętość.
+            opis = f"{data_str}: {objetosc_dnia:,.0f} kg" if objetosc_dnia > 0 else f"{data_str}: brak treningu"
+            komorki_html += (
+                f'<div title="{opis}" style="'
+                f'width:12px;height:12px;border-radius:3px;'
+                f'background:{kolor};margin-bottom:3px;"></div>'
+            )
+            dzien_kursor += timedelta(days=1)
+        kolumny_html += f'<div style="display:flex;flex-direction:column;margin-right:3px;">{komorki_html}</div>'
+
+    return f"""
+    <div style="display:flex; overflow-x:auto; padding:0.4rem 0.1rem;">
+        {kolumny_html}
+    </div>
+    <div style="font-size:0.75rem; color:{KOLOR_TEKST_PRZYGASZONY};">
+        Jaśniej = lżejszy dzień, ciemniej = cięższy. Puste = brak treningu.
+        (Przesuń poziomo, żeby zobaczyć starsze tygodnie.)
+    </div>
+    """
+
+
+def _poniedzialek_tygodnia_lokalny(data_obj):
+    """Ten sam przepis co _poniedzialek_tygodnia() w database.py (cofnięcie
+    do poniedziałku danego tygodnia) - trzymamy osobną, małą kopię tutaj w
+    app.py, żeby funkcje "czysto wizualne" (jak heatmapa) nie musiały
+    importować wewnętrznych, prywatnych pomocników z database.py."""
+    return data_obj - timedelta(days=data_obj.weekday())
 
 
 def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
@@ -744,6 +828,29 @@ if st.session_state.page == "menu":
                 else:
                     st.error(komunikat)
 
+        st.markdown("---")
+
+        # --- NOWOŚĆ: EKSPORT DO CSV (do Excela / Arkuszy Google / Pythona) --
+        st.caption(
+            "📤 Chcesz pogrzebać w danych samodzielnie (Excel, Arkusze "
+            "Google, własny skrypt)? Pobierz je jako zwykły CSV:"
+        )
+        kol_csv1, kol_csv2 = st.columns(2)
+        kol_csv1.download_button(
+            label="📤 Treningi (CSV)",
+            data=eksportuj_treningi_jako_csv(),
+            file_name=f"treningi_{TODAY}.csv",
+            mime="text/csv",
+            key="eksport_csv_treningi_btn",
+        )
+        kol_csv2.download_button(
+            label="📤 Waga ciała (CSV)",
+            data=eksportuj_wage_ciala_jako_csv(),
+            file_name=f"waga_ciala_{TODAY}.csv",
+            mime="text/csv",
+            key="eksport_csv_waga_btn",
+        )
+
 
 # --- EKRAN 1: WYBÓR PLANU TRENINGOWEGO + EDYCJA W PRAWYM GÓRNYM ROGU ---
 elif st.session_state.page == "select_day":
@@ -988,6 +1095,24 @@ elif st.session_state.page == "active_exercise":
     if ex.get("note"):
         st.info(ex["note"])
 
+    # ------------------------------------------------------------------
+    # NOWOŚĆ: Sugestia celu na dziś - prosty "progressive overload coach".
+    # Pokazujemy to PRZED polami do wpisywania, żeby wiedzieć, do czego dążyć,
+    # ZANIM zaczniesz wpisywać wyniki (nie po fakcie).
+    # ------------------------------------------------------------------
+    sugestia = pobierz_sugestie_celu(ex_name)
+    if sugestia is not None:
+        data_sugestii_ladna = datetime.strptime(sugestia["poprzednia_data"], "%Y-%m-%d").strftime("%d.%m.%Y")
+        st.markdown(
+            f"""
+            <div class="skandy-karta">
+                🎯 <b>Cel na dziś</b> (ostatnio {data_sugestii_ladna}: {sugestia['poprzedni_wynik']})<br>
+                Spróbuj: <b>{sugestia['opcja_a']}</b> &nbsp;albo&nbsp; <b>{sugestia['opcja_b']}</b>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     st.markdown("### 📝 Wpisz wyniki")
 
     sets_count_key = f"sets_{ex['key']}"
@@ -997,9 +1122,14 @@ elif st.session_state.page == "active_exercise":
     prefill_key = f"prefilled_{ex['key']}"
     if prefill_key not in st.session_state:
         today_sets = get_today_sets(ex_name, TODAY)
+        # NOWOŚĆ: wczytujemy też RPE zapisane dziś dla tego ćwiczenia (jeśli
+        # jakieś jest), żeby pole suwaka "pamiętało" wcześniejszy wybór po
+        # odświeżeniu strony - dokładnie tak samo jak dla wagi/powtórzeń.
+        dzisiejsze_rpe = get_rpe_for_date(ex_name, TODAY)
         for set_num, w, r in today_sets:
             st.session_state[f"w_{ex['key']}_{set_num}"] = w
             st.session_state[f"r_{ex['key']}_{set_num}"] = r
+            st.session_state[f"rpe_{ex['key']}_{set_num}"] = dzisiejsze_rpe.get(set_num, 0)
             if set_num > st.session_state[sets_count_key]:
                 st.session_state[sets_count_key] = set_num
         st.session_state[prefill_key] = True
@@ -1032,6 +1162,7 @@ elif st.session_state.page == "active_exercise":
         if st.session_state.get(flaga_resetu_klucz, False):
             st.session_state[f"w_{ex['key']}_{i}"] = 0.0
             st.session_state[f"r_{ex['key']}_{i}"] = 0
+            st.session_state[f"rpe_{ex['key']}_{i}"] = 0  # NOWOŚĆ: zerujemy też RPE
             st.session_state[flaga_resetu_klucz] = False
 
         col1, col2 = st.columns(2)
@@ -1047,6 +1178,24 @@ elif st.session_state.page == "active_exercise":
         if weight > 0 and reps > 0:
             rep_max = weight * (1 + reps / 30)
             st.caption(f"Szacowany max (1RM): **{rep_max:.1f} kg**")
+
+        # ------------------------------------------------------------------
+        # NOWOŚĆ: suwak RPE (subiektywne odczucie wysiłku, skala 0-10).
+        # 0 = "pomiń, nie podaję" - celowo zaczynamy od 0, a nie od 5 czy 7,
+        # żeby appka NIGDY nie "zgadywała" RPE za Ciebie - musisz świadomie
+        # przesunąć suwak, żeby cokolwiek zostało zapisane.
+        # ------------------------------------------------------------------
+        rpe_wartosc = st.slider(
+            f"RPE {i}",
+            min_value=0, max_value=10, step=1,
+            key=f"rpe_{ex['key']}_{i}",
+            label_visibility="collapsed",
+            help="Rate of Perceived Exertion - jak ciężka subiektywnie była ta seria? 0 = pomiń, 10 = absolutny maksymalny wysiłek.",
+        )
+        if rpe_wartosc > 0:
+            st.caption(f"😤 RPE: **{rpe_wartosc}/10**")
+        else:
+            st.caption("😤 RPE: _(opcjonalnie - przesuń suwak, żeby zapisać)_")
 
         # ------------------------------------------------------------------
         # Dwa przyciski obok siebie: ZAPISZ i USUŃ tę konkretną serię.
@@ -1066,7 +1215,7 @@ elif st.session_state.page == "active_exercise":
             poprzedni_rekord_1rm = pobierz_najlepszy_1rm_dla_cwiczenia(ex_name)
 
             zapisano = save_single_set(
-                TODAY, current_day_data["day_key"], ex_name, i, weight, reps
+                TODAY, current_day_data["day_key"], ex_name, i, weight, reps, rpe=rpe_wartosc
             )
             if zapisano:
                 nowy_1rm = weight * (1 + reps / 30) if weight > 0 and reps > 0 else 0
@@ -1192,6 +1341,17 @@ elif st.session_state.page == "stats":
 
     st.header("📈 Super Statystyki")
 
+    # --- 0. HEATMAPA KALENDARZOWA (regularność treningów) -------------------
+    st.subheader("📅 Regularność treningów")
+    st.caption("Każdy kwadracik to jeden dzień - im ciemniejszy, tym cięższy był tego dnia trening.")
+    dzienna_objetosc = pobierz_dzienna_objetosc()
+    if dzienna_objetosc:
+        st.markdown(narysuj_heatmape_treningowa(dzienna_objetosc), unsafe_allow_html=True)
+    else:
+        st.info("Brak jeszcze danych do pokazania.")
+
+    st.divider()
+
     # --- 1. TYGODNIOWA OBJĘTOŚĆ TRENINGOWA ----------------------------------
     st.subheader("🏋️ Tygodniowa objętość treningowa")
     st.caption(
@@ -1270,6 +1430,21 @@ elif st.session_state.page == "stats":
         kol_r1.metric("Współczynnik r", f"{r:.3f}")
         kol_r2.metric("Wspólne tygodnie", korelacja["liczba_wspolnych_tygodni"])
         st.caption(f"Interpretacja: korelacja **{opis} {kierunek}**.")
+
+    st.divider()
+
+    # --- 6. ŚREDNIE RPE W CZASIE --------------------------------------------
+    st.subheader("😤 Subiektywny wysiłek (RPE) w czasie")
+    st.caption(
+        "Średnie RPE (skala 1-10) zgłaszane przy seriach, zgrupowane po "
+        "tygodniu. Pomijane są serie, dla których nie podałeś RPE."
+    )
+    tygodniowe_rpe = pobierz_tygodniowe_rpe()
+    if len(tygodniowe_rpe) > 1:
+        dane_wykresu_rpe = {w["tydzien"]: w["srednie_rpe"] for w in tygodniowe_rpe}
+        st.line_chart(dane_wykresu_rpe)
+    else:
+        st.info("Podawaj RPE przy zapisywaniu serii (suwak pod każdą serią), żeby zobaczyć tu trend.")
 
 
 # --- EKRAN 6: PODSUMOWANIE TRENINGU ("capstone" po zakończeniu sesji) ---
