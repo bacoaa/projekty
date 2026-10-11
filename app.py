@@ -72,6 +72,43 @@ def pokaz_media_cwiczenia(sciezka):
         st.image(sciezka, use_container_width=True)
 
 
+def _bezpieczny_html_dla_markdown(html):
+    """
+    ZABEZPIECZENIE PRZED BŁĘDEM RENDEROWANIA: gdy przekazujemy WIELOLINIJKOWY
+    kawałek surowego HTML do st.markdown(..., unsafe_allow_html=True),
+    Streamlit (a dokładniej biblioteka Markdown, przez którą tekst
+    przechodzi PRZED wstrzyknięciem HTML) ma pułapkę - jeśli natrafi na
+    PUSTĄ linię (albo linię złożoną tylko z białych znaków) w ŚRODKU bloku
+    HTML, "zamyka" blok surowego HTML w tym miejscu, a WSZYSTKO po niej
+    traktuje jako zwykły tekst/blok kodu zamiast jako HTML - co objawia się
+    tym, że np. </svg> albo <div ...> nagle pojawiają się na ekranie jako
+    DOSŁOWNY, widoczny tekst zamiast się wyrenderować.
+
+    Ta funkcja usuwa WSZYSTKIE puste linie z gotowego HTML-a (łącznie z
+    linią na samym początku, która często powstaje przy budowaniu stringa
+    przez wielolinijkowy f-string z wcięciami) - dzięki temu HTML zawsze
+    trafia do przeglądarki jako JEDEN, nieprzerwany blok, bez pułapek.
+
+    Używamy jej na KAŻDYM kawałku HTML, który budujemy sami (drzewo passy,
+    heatmapa, karta sugestii celu) - PRZED przekazaniem do st.markdown().
+    (Nie dotyczy to np. głównego bloku <style>...</style> na górze pliku -
+    znaczniki <style> i <script> są przez Markdown traktowane inaczej i nie
+    mają tego problemu, więc jego nie musimy w ten sposób zabezpieczać.)
+
+    UWAGA: oprócz usuwania pustych linii, dokładamy TEŻ ".lstrip()" do
+    KAŻDEJ linii (usuwamy wcięcie z jej POCZĄTKU). To WAŻNE, nie tylko
+    kosmetyczne: gdyby np. sama PIERWSZA linijka miała 4+ spacje wcięcia
+    (co naturalnie wychodzi przy budowaniu HTML-a wielolinijkowym,
+    wyrównanym f-stringiem w Pythonie), Markdown i tak potraktowałby to
+    jako początek "indented code block" - DOKŁADNIE ten sam błąd co z
+    pustymi liniami, tylko wyzwolony w inny sposób. Dla surowego HTML-a
+    wcięcia między znacznikami i tak nie mają żadnego znaczenia wizualnego
+    (przeglądarka je ignoruje), więc bezpiecznie usuwamy je wszystkie.
+    """
+    linie_oczyszczone = [linia.lstrip() for linia in html.split("\n") if linia.strip() != ""]
+    return "\n".join(linie_oczyszczone)
+
+
 def narysuj_drzewo_passy(liczba_tygodni_passy):
     """
     Generuje proste, minimalistyczne drzewo w formacie SVG, którego
@@ -117,7 +154,7 @@ def narysuj_drzewo_passy(liczba_tygodni_passy):
             f'style="animation: wyrosnijLisc 0.5s ease-out {opoznienie}s both;" />'
         )
 
-    return f"""
+    html = f"""
     <div style="text-align:center; padding: 0.5rem 0 0.8rem 0;">
         <svg viewBox="0 0 200 180" width="140" height="126" xmlns="http://www.w3.org/2000/svg">
             <style>
@@ -136,6 +173,12 @@ def narysuj_drzewo_passy(liczba_tygodni_passy):
         </div>
     </div>
     """
+    # KLUCZOWE: usuwamy puste linie (patrz duży komentarz przy
+    # _bezpieczny_html_dla_markdown wyżej) - szczególnie ważne tutaj, bo gdy
+    # "kregi_liasci" jest puste (passa = 0 tygodni), linia {kregi_liasci}
+    # staje się PUSTĄ linią w środku HTML-a, co bez tego zabezpieczenia
+    # psuje renderowanie WSZYSTKIEGO, co jest po niej.
+    return _bezpieczny_html_dla_markdown(html)
 
 
 def pokaz_spadajace_talerze(nonce):
@@ -254,7 +297,7 @@ def narysuj_heatmape_treningowa(dane_dzienne, tygodnie_wstecz=20):
             dzien_kursor += timedelta(days=1)
         kolumny_html += f'<div style="display:flex;flex-direction:column;margin-right:3px;">{komorki_html}</div>'
 
-    return f"""
+    html = f"""
     <div style="display:flex; overflow-x:auto; padding:0.4rem 0.1rem;">
         {kolumny_html}
     </div>
@@ -263,6 +306,8 @@ def narysuj_heatmape_treningowa(dane_dzienne, tygodnie_wstecz=20):
         (Przesuń poziomo, żeby zobaczyć starsze tygodnie.)
     </div>
     """
+    # Patrz duży komentarz przy _bezpieczny_html_dla_markdown() wyżej w pliku.
+    return _bezpieczny_html_dla_markdown(html)
 
 
 def _poniedzialek_tygodnia_lokalny(data_obj):
@@ -1103,15 +1148,16 @@ elif st.session_state.page == "active_exercise":
     sugestia = pobierz_sugestie_celu(ex_name)
     if sugestia is not None:
         data_sugestii_ladna = datetime.strptime(sugestia["poprzednia_data"], "%Y-%m-%d").strftime("%d.%m.%Y")
-        st.markdown(
-            f"""
+        html_sugestii = f"""
             <div class="skandy-karta">
                 🎯 <b>Cel na dziś</b> (ostatnio {data_sugestii_ladna}: {sugestia['poprzedni_wynik']})<br>
                 Spróbuj: <b>{sugestia['opcja_a']}</b> &nbsp;albo&nbsp; <b>{sugestia['opcja_b']}</b>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            """
+        # Patrz duży komentarz przy _bezpieczny_html_dla_markdown() na
+        # górze pliku - bez tego pierwsza pusta linia tego bloku psułaby
+        # renderowanie (dokładnie ten sam błąd co w drzewie passy).
+        st.markdown(_bezpieczny_html_dla_markdown(html_sugestii), unsafe_allow_html=True)
 
     st.markdown("### 📝 Wpisz wyniki")
 
