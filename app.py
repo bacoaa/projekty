@@ -28,11 +28,40 @@ from database import (
     pobierz_dzienna_objetosc,
     pobierz_sugestie_celu,
     eksportuj_treningi_jako_csv, eksportuj_wage_ciala_jako_csv,
+    zapisz_notatke_dziennika, pobierz_notatke_dziennika,
+    usun_caly_trening_z_dnia,
 )
 from exercises_config import WORKOUT_DAYS, MAX_SETS
 
 DEFAULT_SETS = 3
 TODAY = datetime.now().strftime("%Y-%m-%d")
+
+# Ładnie sformatowana dzisiejsza data (do wyświetlania, np. "12.10.2026") -
+# używana m.in. na uniwersalnym ekranie notatki.
+DZIS_LADNIE = datetime.now().strftime("%d.%m.%Y")
+
+# Hasło administratora - chroni tryb edycji planów/ćwiczeń ORAZ usuwanie
+# zapisanych treningów. JEDNA stała, używana we WSZYSTKICH miejscach, które
+# tego hasła wymagają - zmieniasz je raz, tutaj, i działa to wszędzie.
+HASLO_ADMINA = "22481"
+
+# ----------------------------------------------------------------------------
+# MAPA KATEGORII NOTATEK: techniczny klucz -> (ładny tytuł, ekran powrotu)
+# ----------------------------------------------------------------------------
+# JEDNO, wspólne miejsce prawdy dla wszystkich 6 kategorii prostych notatek
+# "Dziennika Operacyjnego" - używane zarówno przy tworzeniu przycisków
+# (żeby nie powtarzać tych samych tytułów w kilku miejscach), jak i przy
+# ODTWARZANIU ekranu notatki po przeładowaniu strony (gdzie w URL mamy
+# TYLKO techniczny klucz kategorii i musimy na jego podstawie odtworzyć
+# tytuł oraz to, dokąd ma wrócić przycisk "Wstecz").
+MAPA_KATEGORII_NOTATEK = {
+    "zadania": ("✅ Robota zrobiona", "menu"),
+    "paliwo_i_silnik": ("⛽ Paliwo i silnik", "sub_zdrowie"),
+    "trzezwe_spojrzenie": ("🧭 Trzeźwe spojrzenie", "sub_rozwoj"),
+    "co_w_trawie_piszczy": ("🌾 Co w trawie piszczy", "sub_rozwoj"),
+    "lekcja_dnia": ("📖 Lekcja dnia", "sub_rozwoj"),
+    "plan_na_jutro": ("🎯 Rozkaz na jutro", "menu"),
+}
 
 # Ile sekund ma domyślnie trwać stoper odpoczynku po zapisaniu serii.
 SEKUNDY_ODPOCZYNKU = 90
@@ -367,7 +396,7 @@ def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
 # ----------------------------------------------------------------------------
 # 1. KONFIGURACJA STRONY I STYLÓW CSS
 # ----------------------------------------------------------------------------
-st.set_page_config(page_title="Kącik Mocy", page_icon="🌲", layout="centered")
+st.set_page_config(page_title="Dziennik Operacyjny", page_icon="🎖️", layout="centered")
 
 # ----------------------------------------------------------------------------
 # PALETA KOLORÓW "SKANDYNAWSKA" - jedno miejsce, z którego czerpią WSZYSTKIE
@@ -599,8 +628,8 @@ if "page" not in st.session_state:
     # Bezpieczna wartość domyślna - gdyby coś dalej nie pasowało.
     st.session_state.page = "menu"
 
-    if zapisana_strona in ("select_day", "history", "stats"):
-        # Te dwa ekrany nie wymagają żadnych dodatkowych danych do odtworzenia.
+    if zapisana_strona in ("select_day", "history", "stats", "sub_zdrowie", "sub_rozwoj", "stan_licznika"):
+        # Te ekrany nie wymagają żadnych dodatkowych danych do odtworzenia.
         st.session_state.page = zapisana_strona
 
     elif zapisana_strona == "exercise_list" and zapisany_dzien_klucz:
@@ -636,6 +665,20 @@ if "page" not in st.session_state:
         if dzien:
             st.session_state.current_day_key = zapisany_dzien_klucz
             st.session_state.page = "session_summary"
+
+    elif zapisana_strona == "notatka":
+        # Dla ekranu notatki w URL zapisujemy TYLKO klucz kategorii (patrz
+        # go_to_notatka()) - tytuł i miejsce powrotu trzeba odtworzyć na
+        # nowo z tej samej mapy, której używamy przy tworzeniu przycisków
+        # (żeby nie trzymać tego samego raz w URL, raz tutaj - jedno źródło
+        # prawdy poniżej, w MAPA_KATEGORII_NOTATEK).
+        zapisana_kategoria = st.query_params.get("kat")
+        if zapisana_kategoria in MAPA_KATEGORII_NOTATEK:
+            tytul_z_mapy, powrot_z_mapy = MAPA_KATEGORII_NOTATEK[zapisana_kategoria]
+            st.session_state.notatka_kategoria = zapisana_kategoria
+            st.session_state.notatka_tytul = tytul_z_mapy
+            st.session_state.notatka_powrot = powrot_z_mapy
+            st.session_state.page = "notatka"
     # W każdym innym przypadku (np. puste query params przy pierwszej
     # wizycie) zostajemy przy bezpiecznej wartości domyślnej "menu".
 
@@ -729,104 +772,85 @@ def go_to_session_summary():
     st.query_params["day"] = st.session_state.current_day_key
 
 
+# --- NOWOŚĆ: nawigacja dla "Dziennika Operacyjnego" (4 kategorie dnia) ------
+def go_to_sub_zdrowie():
+    """Podmenu 'Zdrowie, ciało i forma' - tu teraz 'mieszka' Twój dotychczasowy
+    tracker treningów (Twardy test), Historia, Statystyki i Stan licznika."""
+    st.session_state.page = "sub_zdrowie"
+    st.query_params.clear()
+    st.query_params["page"] = "sub_zdrowie"
+
+
+def go_to_sub_rozwoj():
+    """Podmenu 'Rozwój i przemyślenia' - 3 kategorie luźniejszych notatek."""
+    st.session_state.page = "sub_rozwoj"
+    st.query_params.clear()
+    st.query_params["page"] = "sub_rozwoj"
+
+
+def go_to_notatka(kategoria):
+    """
+    Przechodzi do UNIWERSALNEGO ekranu notatki tekstowej (patrz EKRAN
+    "notatka" niżej) - jednego, wspólnego dla WSZYSTKICH 6 kategorii
+    prostych notatek, żeby nie pisać 6 prawie identycznych ekranów osobno.
+
+    Parametr "kategoria" to techniczny klucz zapisu w bazie (np. "zadania")
+    - ładny tytuł wyświetlany na ekranie oraz to, dokąd ma wracać przycisk
+    "Wstecz", odczytujemy z MAPA_KATEGORII_NOTATEK (jedno źródło prawdy na
+    górze pliku) zamiast przekazywać je tu za każdym razem osobno - dzięki
+    temu nie da się przypadkiem gdzieś podać innego tytułu dla tej samej
+    kategorii.
+    """
+    tytul, powrot_do = MAPA_KATEGORII_NOTATEK[kategoria]
+    st.session_state.page = "notatka"
+    st.session_state.notatka_kategoria = kategoria
+    st.session_state.notatka_tytul = tytul
+    st.session_state.notatka_powrot = powrot_do
+    st.query_params.clear()
+    st.query_params["page"] = "notatka"
+    st.query_params["kat"] = kategoria
+
+
+def go_to_stan_licznika():
+    """Ekran 'Stan licznika' - waga ciała (istniejąca funkcja) + notatka
+    tekstowa o samopoczuciu/regeneracji."""
+    st.session_state.page = "stan_licznika"
+    st.query_params.clear()
+    st.query_params["page"] = "stan_licznika"
+
+
 # ----------------------------------------------------------------------------
 # 3. WIDOKI APLIKACJI
 # ----------------------------------------------------------------------------
 
-# --- EKRAN 0: MENU GŁÓWNE ---
+# --- EKRAN 0: MENU GŁÓWNE - teraz nadrzędny hub "Dziennika Operacyjnego" ---
 if st.session_state.page == "menu":
-    st.title("🌲 Kącik Mocy")
-    st.caption("Twój leśny kącik siły")
-    st.write("Wybierz, co robimy dzisiaj:")
+    st.title("🎖️ Dziennik Operacyjny")
+    st.caption("Fakty, nie opinie.")
+    st.write("Wybierz kategorię:")
 
-    # Niewidoczny znacznik - patrz duży komentarz przy "#puls-marker" w CSS
-    # wyżej. Musi być TUŻ przed przyciskiem, który ma pulsować.
-    st.markdown('<div id="puls-marker"></div>', unsafe_allow_html=True)
-    if st.button("🔥 NOWY TRENING", type="primary", key="menu_new_workout"):
-        go_to_workout_day_selection()
+    if st.button("✅ Robota zrobiona", type="primary", key="menu_zadania"):
+        go_to_notatka("zadania")
         st.rerun()
 
-    if st.button("📚 HISTORIA I WYKRESY", key="menu_history"):
-        go_to_history()
+    if st.button("💪 Zdrowie, ciało i forma", key="menu_zdrowie"):
+        go_to_sub_zdrowie()
         st.rerun()
 
-    if st.button("📈 SUPER STATYSTYKI", key="menu_stats"):
-        go_to_stats()
+    if st.button("🧠 Rozwój i przemyślenia", key="menu_rozwoj"):
+        go_to_sub_rozwoj()
         st.rerun()
 
-    # ------------------------------------------------------------------
-    # NOWOŚĆ: SZYBKIE STATYSTYKI
-    # ------------------------------------------------------------------
-    # Trzy duże liczby podsumowujące CAŁĄ dotychczasową historię - "na
-    # pierwszy rzut oka" widzisz swój postęp, bez wchodzenia w Historię.
-    # st.metric() to wbudowany w Streamlit widget do pokazywania właśnie
-    # takich "kafelkowych" liczb (duża cyfra + mały podpis pod spodem).
-    st.write("")  # odrobina odstępu
-    statystyki = pobierz_szybkie_statystyki()
-
-    if statystyki["liczba_treningow"] > 0:
-        kol_stat1, kol_stat2, kol_stat3 = st.columns(3)
-        kol_stat1.metric("Treningi", statystyki["liczba_treningow"])
-        kol_stat2.metric("Serie", statystyki["liczba_serii"])
-        # ":,.0f" formatuje liczbę z separatorem tysięcy i bez miejsc po
-        # przecinku (np. 12450 -> "12,450") - czytelniej dla dużych liczb.
-        kol_stat3.metric("Objętość", f"{statystyki['laczna_objetosc']:,.0f} kg")
-
-    # ------------------------------------------------------------------
-    # NOWOŚĆ: ROSNĄCE DRZEWO PASSY
-    # ------------------------------------------------------------------
-    # Pokazujemy je zawsze (nawet przy passie = 0), żeby zachęcić do
-    # zaczęcia - wtedy appka pokazuje zamiast drzewa małą "sadzonkę" (🌱).
-    info_passy_menu = pobierz_info_o_passie()
-    st.markdown(
-        narysuj_drzewo_passy(info_passy_menu["aktualna_passa"]),
-        unsafe_allow_html=True,
-    )
-
-    # ------------------------------------------------------------------
-    # NOWOŚĆ: WAGA CIAŁA W CZASIE
-    # ------------------------------------------------------------------
-    with st.expander("⚖️ Waga ciała"):
-        st.caption("Zważ się i zapisz wynik - zobaczysz, jak zmienia się Twoja waga na przestrzeni czasu.")
-
-        # Jeśli dzisiaj już się ważyłeś, podpowiadamy tę wartość w polu,
-        # zamiast zaczynać zawsze od zera.
-        dzisiejsza_waga = pobierz_wage_na_dzien(TODAY)
-        wartosc_startowa = dzisiejsza_waga if dzisiejsza_waga is not None else 70.0
-
-        kol_waga_input, kol_waga_btn = st.columns([2, 1])
-        nowa_waga = kol_waga_input.number_input(
-            "Twoja waga dzisiaj (kg)",
-            min_value=0.0,
-            max_value=300.0,
-            step=0.1,
-            value=wartosc_startowa,
-            key="input_waga_ciala",
-            label_visibility="collapsed",
-        )
-        if kol_waga_btn.button("💾 Zapisz wagę", key="zapisz_wage_btn"):
-            zapisz_wage_ciala(TODAY, nowa_waga)
-            st.toast(f"Zapisano wagę: {nowa_waga:g} kg", icon="⚖️")
-            st.rerun()
-
-        # Wykres - tylko jeśli mamy co najmniej 2 pomiary (jeden punkt nie
-        # tworzy sensownej linii).
-        historia_wagi = pobierz_historie_wagi_ciala()
-        if len(historia_wagi) > 1:
-            dane_wykresu = {wpis["date"]: wpis["weight"] for wpis in historia_wagi}
-            st.line_chart(dane_wykresu)
-        elif len(historia_wagi) == 1:
-            st.caption("Zapisz wagę jeszcze raz innego dnia, żeby zobaczyć wykres zmian.")
+    if st.button("🎯 Rozkaz na jutro", key="menu_plan"):
+        go_to_notatka("plan_na_jutro")
+        st.rerun()
 
     # ------------------------------------------------------------------
     # NOWOŚĆ: KOPIA ZAPASOWA BAZY DANYCH
     # ------------------------------------------------------------------
-    # Streamlit Community Cloud NIE gwarantuje, że plik bazy danych
-    # przetrwa każdy restart appki - dlatego dajemy Ci prosty sposób na
-    # ręczne zabezpieczenie CAŁEJ historii treningów: pobranie jej jako
-    # jeden plik, i w razie czego - wgranie z powrotem.
-    # Używamy st.expander(), żeby ta sekcja była domyślnie ZWINIĘTA i nie
-    # rzucała się w oczy na co dzień.
+    # To zostaje na nadrzędnym Menu (nie w "Zdrowiu"), bo dotyczy CAŁEJ
+    # bazy danych appki (treningów I notatek), a nie tylko jednej kategorii.
+    st.write("")
     with st.expander("⚙️ Kopia zapasowa danych"):
         st.caption(
             "Streamlit czasem resetuje zapisane dane przy aktualizacjach "
@@ -897,13 +921,182 @@ if st.session_state.page == "menu":
         )
 
 
+# --- EKRAN 0b: PODMENU "ZDROWIE, CIAŁO I FORMA" -----------------------------
+# Tu teraz "mieszka" cały dotychczasowy tracker treningów (Twardy test),
+# Historia, Statystyki, Stan licznika i Paliwo i silnik - wszystko, co
+# dotyczy ciała i treningu, zebrane w jednym miejscu.
+elif st.session_state.page == "sub_zdrowie":
+    if st.button("⬅️ Wróć do Dziennika", key="back_sub_zdrowie"):
+        go_to_menu()
+        st.rerun()
+
+    st.title("💪 Zdrowie, ciało i forma")
+
+    # Niewidoczny znacznik - patrz duży komentarz przy "#puls-marker" w CSS
+    # na górze pliku. Musi być TUŻ przed przyciskiem, który ma pulsować.
+    st.markdown('<div id="puls-marker"></div>', unsafe_allow_html=True)
+    if st.button("🏋️ Twardy test (nowy trening)", type="primary", key="sub_zdrowie_nowy_trening"):
+        go_to_workout_day_selection()
+        st.rerun()
+
+    if st.button("📚 Historia i wykresy", key="sub_zdrowie_historia"):
+        go_to_history()
+        st.rerun()
+
+    if st.button("📈 Super Statystyki", key="sub_zdrowie_stats"):
+        go_to_stats()
+        st.rerun()
+
+    if st.button("📏 Stan licznika (waga, samopoczucie)", key="sub_zdrowie_licznik"):
+        go_to_stan_licznika()
+        st.rerun()
+
+    if st.button("⛽ Paliwo i silnik (dieta, trening)", key="sub_zdrowie_paliwo"):
+        go_to_notatka("paliwo_i_silnik")
+        st.rerun()
+
+    # --- Szybkie statystyki (przeniesione z dawnego Menu Głównego) --------
+    st.write("")
+    statystyki_zdrowie = pobierz_szybkie_statystyki()
+    if statystyki_zdrowie["liczba_treningow"] > 0:
+        kol_stat1, kol_stat2, kol_stat3 = st.columns(3)
+        kol_stat1.metric("Treningi", statystyki_zdrowie["liczba_treningow"])
+        kol_stat2.metric("Serie", statystyki_zdrowie["liczba_serii"])
+        kol_stat3.metric("Objętość", f"{statystyki_zdrowie['laczna_objetosc']:,.0f} kg")
+
+    # --- Rosnące drzewo passy (też przeniesione) ---------------------------
+    info_passy_zdrowie = pobierz_info_o_passie()
+    st.markdown(
+        narysuj_drzewo_passy(info_passy_zdrowie["aktualna_passa"]),
+        unsafe_allow_html=True,
+    )
+
+
+# --- EKRAN 0c: PODMENU "ROZWÓJ I PRZEMYŚLENIA" ------------------------------
+elif st.session_state.page == "sub_rozwoj":
+    if st.button("⬅️ Wróć do Dziennika", key="back_sub_rozwoj"):
+        go_to_menu()
+        st.rerun()
+
+    st.title("🧠 Rozwój i przemyślenia")
+
+    if st.button("🧭 Trzeźwe spojrzenie", type="primary", key="rozwoj_trzezwe"):
+        go_to_notatka("trzezwe_spojrzenie")
+        st.rerun()
+
+    if st.button("🌾 Co w trawie piszczy", key="rozwoj_trawa"):
+        go_to_notatka("co_w_trawie_piszczy")
+        st.rerun()
+
+    if st.button("📖 Lekcja dnia", key="rozwoj_lekcja"):
+        go_to_notatka("lekcja_dnia")
+        st.rerun()
+
+
+# --- EKRAN 0d: UNIWERSALNY EKRAN NOTATKI -------------------------------------
+# Jeden, wspólny ekran dla WSZYSTKICH 6 prostych kategorii tekstowych
+# (zadania, paliwo i silnik, trzeźwe spojrzenie, co w trawie piszczy,
+# lekcja dnia, plan na jutro) - zamiast pisać 6 prawie identycznych
+# ekranów osobno. To, KTÓRA to kategoria i dokąd ma wrócić przycisk
+# "Wstecz", ustawia funkcja go_to_notatka() (patrz wyżej w pliku).
+elif st.session_state.page == "notatka":
+    ekran_powrotu = st.session_state.get("notatka_powrot", "menu")
+
+    if st.button("⬅️ Wstecz", key="back_notatka"):
+        if ekran_powrotu == "sub_zdrowie":
+            go_to_sub_zdrowie()
+        elif ekran_powrotu == "sub_rozwoj":
+            go_to_sub_rozwoj()
+        else:
+            go_to_menu()
+        st.rerun()
+
+    kategoria_notatki = st.session_state.get("notatka_kategoria", "")
+    tytul_notatki = st.session_state.get("notatka_tytul", "Notatka")
+
+    st.title(tytul_notatki)
+    st.caption(f"Wpis na dziś: {DZIS_LADNIE}")
+
+    # Wczytujemy istniejącą notatkę na DZISIAJ (jeśli już coś zapisałeś w
+    # tej kategorii wcześniej dzisiaj) - żeby pole nie było puste przy
+    # ponownym wejściu, tylko pokazywało to, co już wpisałeś.
+    tresc_istniejaca = pobierz_notatke_dziennika(TODAY, kategoria_notatki)
+
+    nowa_tresc = st.text_area(
+        "Treść notatki",
+        value=tresc_istniejaca,
+        height=240,
+        key=f"notatka_pole_{kategoria_notatki}",
+        label_visibility="collapsed",
+        placeholder="Pisz swobodnie...",
+    )
+
+    if st.button("💾 Zapisz", type="primary", key=f"notatka_zapisz_{kategoria_notatki}"):
+        zapisz_notatke_dziennika(TODAY, kategoria_notatki, nowa_tresc)
+        st.toast("Zapisano! 💾", icon="✅")
+
+
+# --- EKRAN 0e: STAN LICZNIKA (waga ciała + notatka o samopoczuciu) ----------
+elif st.session_state.page == "stan_licznika":
+    if st.button("⬅️ Wróć do Zdrowia", key="back_stan_licznika"):
+        go_to_sub_zdrowie()
+        st.rerun()
+
+    st.title("📏 Stan licznika")
+    st.caption("Waga, samopoczucie, regeneracja.")
+
+    # --- Waga ciała (dokładnie ta sama logika, co wcześniej na Menu) -------
+    st.markdown("##### ⚖️ Waga ciała")
+    dzisiejsza_waga = pobierz_wage_na_dzien(TODAY)
+    wartosc_startowa = dzisiejsza_waga if dzisiejsza_waga is not None else 70.0
+
+    kol_waga_input, kol_waga_btn = st.columns([2, 1])
+    nowa_waga = kol_waga_input.number_input(
+        "Twoja waga dzisiaj (kg)",
+        min_value=0.0,
+        max_value=300.0,
+        step=0.1,
+        value=wartosc_startowa,
+        key="input_waga_ciala",
+        label_visibility="collapsed",
+    )
+    if kol_waga_btn.button("💾 Zapisz wagę", key="zapisz_wage_btn"):
+        zapisz_wage_ciala(TODAY, nowa_waga)
+        st.toast(f"Zapisano wagę: {nowa_waga:g} kg", icon="⚖️")
+        st.rerun()
+
+    historia_wagi = pobierz_historie_wagi_ciala()
+    if len(historia_wagi) > 1:
+        dane_wykresu = {wpis["date"]: wpis["weight"] for wpis in historia_wagi}
+        st.line_chart(dane_wykresu)
+    elif len(historia_wagi) == 1:
+        st.caption("Zapisz wagę jeszcze raz innego dnia, żeby zobaczyć wykres zmian.")
+
+    st.markdown("---")
+
+    # --- Notatka o samopoczuciu / regeneracji -------------------------------
+    st.markdown("##### 🛌 Samopoczucie / regeneracja")
+    tresc_licznika = pobierz_notatke_dziennika(TODAY, "stan_licznika_notatka")
+    nowa_tresc_licznika = st.text_area(
+        "Samopoczucie",
+        value=tresc_licznika,
+        height=150,
+        key="notatka_stan_licznika_pole",
+        label_visibility="collapsed",
+        placeholder="Jak się dziś czujesz? Jak regeneracja, sen, energia...",
+    )
+    if st.button("💾 Zapisz notatkę", key="zapisz_notatke_licznika_btn"):
+        zapisz_notatke_dziennika(TODAY, "stan_licznika_notatka", nowa_tresc_licznika)
+        st.toast("Zapisano notatkę! 💾", icon="✅")
+
+
 # --- EKRAN 1: WYBÓR PLANU TRENINGOWEGO + EDYCJA W PRAWYM GÓRNYM ROGU ---
 elif st.session_state.page == "select_day":
     col_top_back, col_top_edit = st.columns([2, 1])
 
-    if col_top_back.button("⬅️ Wróć do Menu", key="back_to_menu_from_select"):
+    if col_top_back.button("⬅️ Wróć do Zdrowia", key="back_to_menu_from_select"):
         st.session_state.editing_plan_key = None
-        go_to_menu()
+        go_to_sub_zdrowie()
         st.rerun()
 
     edit_btn_label = "🔓 Edycja ON" if st.session_state.edit_mode_plans else "🔒 Edycja"
@@ -920,7 +1113,7 @@ elif st.session_state.page == "select_day":
         st.info("🔐 Tryb edycji wymaga podania hasła administratora.")
         admin_password = st.text_input("Wpisz hasło:", type="password", key="admin_pass_plans")
         if st.button("Odblokuj", key="unlock_plans_btn"):
-            if admin_password == "admin":
+            if admin_password == HASLO_ADMINA:
                 st.session_state.is_admin_unlocked = True
                 st.rerun()
             else:
@@ -1020,7 +1213,7 @@ elif st.session_state.page == "exercise_list":
     if not current_day:
         st.error("Nie znaleziono planu treningowego.")
         if st.button("Wróć do menu"):
-            go_to_menu()
+            go_to_sub_zdrowie()
             st.rerun()
     else:
         st.subheader(f"Plan: {current_day['title']}")
@@ -1029,7 +1222,7 @@ elif st.session_state.page == "exercise_list":
             st.info("🔐 Tryb edycji ćwiczeń wymaga podania hasła administratora.")
             admin_password_ex = st.text_input("Wpisz hasło:", type="password", key="admin_pass_ex")
             if st.button("Odblokuj edycję", key="unlock_ex_btn"):
-                if admin_password_ex == "admin":
+                if admin_password_ex == HASLO_ADMINA:
                     st.session_state.is_admin_unlocked = True
                     st.rerun()
                 else:
@@ -1339,8 +1532,8 @@ elif st.session_state.page == "active_exercise":
 
 # --- EKRAN 4: HISTORIA I WYKRESY PROGRESU ---
 elif st.session_state.page == "history":
-    if st.button("⬅️ Wróć do Menu", key="back_to_menu_from_history"):
-        go_to_menu()
+    if st.button("⬅️ Wróć do Zdrowia", key="back_to_menu_from_history"):
+        go_to_sub_zdrowie()
         st.rerun()
 
     st.header("📚 Historia Treningów")
@@ -1375,14 +1568,68 @@ elif st.session_state.page == "history":
                         chart_data = {row["date"]: row["max_weight"] for row in prog_data}
                         st.line_chart(chart_data)
 
+                # ----------------------------------------------------------
+                # NOWOŚĆ: USUWANIE CAŁEGO TRENINGU (chronione hasłem)
+                # ----------------------------------------------------------
+                # Flaga "czy pokazać potwierdzenie" jest osobna DLA KAŻDEGO
+                # dnia z osobna (klucz zawiera date_str) - inaczej kliknięcie
+                # "Usuń" przy jednym treningu pokazywałoby potwierdzenie przy
+                # WSZYSTKICH kartach naraz.
+                flaga_potwierdzenia = f"potwierdz_usun_{date_str}"
+                if flaga_potwierdzenia not in st.session_state:
+                    st.session_state[flaga_potwierdzenia] = False
+
+                if not st.session_state[flaga_potwierdzenia]:
+                    if st.button("🗑️ Usuń ten trening", key=f"usun_trening_btn_{date_str}"):
+                        st.session_state[flaga_potwierdzenia] = True
+                        st.rerun()
+                else:
+                    st.warning(
+                        f"⚠️ Na pewno usunąć CAŁY trening z {date_str}? "
+                        "Tej operacji nie da się cofnąć."
+                    )
+                    # Jeśli hasło było już wcześniej podane w TEJ sesji appki
+                    # (np. przy edycji planów) - nie pytamy o nie ponownie,
+                    # to TO SAMO zabezpieczenie (HASLO_ADMINA), więc odblokowanie
+                    # w jednym miejscu odblokowuje je wszędzie w tej appce.
+                    if not st.session_state.is_admin_unlocked:
+                        haslo_usun = st.text_input(
+                            "Wpisz hasło administratora:",
+                            type="password",
+                            key=f"haslo_usun_{date_str}",
+                        )
+                        col_usun_tak, col_usun_nie = st.columns(2)
+                        if col_usun_tak.button("🗑️ Odblokuj i usuń", key=f"usun_tak_{date_str}"):
+                            if haslo_usun == HASLO_ADMINA:
+                                st.session_state.is_admin_unlocked = True
+                                usun_caly_trening_z_dnia(date_str)
+                                st.session_state[flaga_potwierdzenia] = False
+                                st.toast("Trening usunięty.", icon="🗑️")
+                                st.rerun()
+                            else:
+                                st.error("Błędne hasło.")
+                        if col_usun_nie.button("Anuluj", key=f"usun_nie_{date_str}"):
+                            st.session_state[flaga_potwierdzenia] = False
+                            st.rerun()
+                    else:
+                        col_usun_tak2, col_usun_nie2 = st.columns(2)
+                        if col_usun_tak2.button("🗑️ Tak, usuń na zawsze", key=f"usun_tak2_{date_str}"):
+                            usun_caly_trening_z_dnia(date_str)
+                            st.session_state[flaga_potwierdzenia] = False
+                            st.toast("Trening usunięty.", icon="🗑️")
+                            st.rerun()
+                        if col_usun_nie2.button("Anuluj", key=f"usun_nie2_{date_str}"):
+                            st.session_state[flaga_potwierdzenia] = False
+                            st.rerun()
+
             # Odstęp między kolejnymi "kartami" sesji treningowych.
             st.write("")
 
 
 # --- EKRAN 5: SUPER STATYSTYKI (dashboard analityczny) ---
 elif st.session_state.page == "stats":
-    if st.button("⬅️ Wróć do Menu", key="back_to_menu_from_stats"):
-        go_to_menu()
+    if st.button("⬅️ Wróć do Zdrowia", key="back_to_menu_from_stats"):
+        go_to_sub_zdrowie()
         st.rerun()
 
     st.header("📈 Super Statystyki")
@@ -1560,6 +1807,6 @@ elif st.session_state.page == "session_summary":
         )
 
     st.markdown("---")
-    if st.button("🏠 Wróć do Menu Głównego", type="primary", key="summary_to_menu"):
-        go_to_menu()
+    if st.button("💪 Wróć do Zdrowia", type="primary", key="summary_to_menu"):
+        go_to_sub_zdrowie()
         st.rerun()

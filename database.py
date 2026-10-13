@@ -170,6 +170,33 @@ def init_db():
         )
         conn.commit()
 
+        # ---------------------------------------------------------------
+        # NOWOŚĆ: "dziennik_notatki" - JEDNA uniwersalna tabela na WSZYSTKIE
+        # kategorie prostych notatek tekstowych w nowym "Dzienniku
+        # Operacyjnym" (zadania, paliwo i silnik, trzeźwe spojrzenie,
+        # co w trawie piszczy, lekcja dnia, plan na jutro, notatka przy
+        # stanie licznika). Zamiast robić OSOBNĄ tabelę dla każdej z tych
+        # kategorii (co oznaczałoby też osobne funkcje zapisu/odczytu dla
+        # każdej - masa powtarzającego się kodu), trzymamy je wszystkie w
+        # jednym miejscu, rozróżnione kolumną "kategoria".
+        #
+        # KLUCZ GŁÓWNY na (date, kategoria) oznacza: jeden wpis na dany
+        # dzień W DANEJ kategorii - zapis drugi raz tego samego dnia w tej
+        # samej kategorii NADPISUJE poprzedni (tak jak w body_weight).
+        # ---------------------------------------------------------------
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dziennik_notatki (
+                date TEXT NOT NULL,       -- data notatki "RRRR-MM-DD"
+                kategoria TEXT NOT NULL,  -- techniczny klucz kategorii, np. "zadania"
+                tresc TEXT NOT NULL,      -- sama treść notatki (dowolny tekst)
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (date, kategoria)
+            )
+            """
+        )
+        conn.commit()
+
 
 # ----------------------------------------------------------------------------
 # TRWAŁY MAGAZYN "KLUCZ -> WARTOŚĆ" (żeby dane przeżyły przeładowanie strony)
@@ -644,6 +671,69 @@ def pobierz_wage_na_dzien(date_str):
             "SELECT weight FROM body_weight WHERE date = ?", (date_str,)
         ).fetchone()
         return wiersz["weight"] if wiersz is not None else None
+
+
+# ----------------------------------------------------------------------------
+# UNIWERSALNE NOTATKI DZIENNIKA (Dziennik Operacyjny - 6 kategorii tekstowych)
+# ----------------------------------------------------------------------------
+def zapisz_notatke_dziennika(date_str, kategoria, tresc):
+    """
+    Zapisuje (albo NADPISUJE, jeśli na ten dzień w tej kategorii już coś
+    było) treść notatki. Pusty tekst też jest poprawną wartością - to po
+    prostu "wyczyszczenie" notatki danego dnia.
+
+    Parametry:
+        date_str  - data "RRRR-MM-DD"
+        kategoria - techniczny klucz kategorii, np. "zadania",
+                    "paliwo_i_silnik", "trzezwe_spojrzenie" itd.
+        tresc     - sama treść notatki (dowolny, wielolinijkowy tekst)
+    """
+    with get_connection() as conn:
+        teraz = datetime.now().isoformat()
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO dziennik_notatki (date, kategoria, tresc, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (date_str, kategoria, tresc, teraz),
+        )
+        conn.commit()
+
+
+def pobierz_notatke_dziennika(date_str, kategoria):
+    """
+    Odczytuje treść notatki danej kategorii z danego dnia. Zwraca pusty
+    string "", jeśli jeszcze nic tam nie zapisano (żeby app.py mogło od
+    razu wstawić tę wartość jako domyślną zawartość pola tekstowego, bez
+    martwienia się o None).
+    """
+    with get_connection() as conn:
+        wiersz = conn.execute(
+            "SELECT tresc FROM dziennik_notatki WHERE date = ? AND kategoria = ?",
+            (date_str, kategoria),
+        ).fetchone()
+        return wiersz["tresc"] if wiersz is not None else ""
+
+
+# ----------------------------------------------------------------------------
+# USUWANIE CAŁEGO ZAPISANEGO TRENINGU (chronione hasłem w app.py)
+# ----------------------------------------------------------------------------
+def usun_caly_trening_z_dnia(date_str):
+    """
+    Kasuje WSZYSTKIE zapisane serie (wszystkich ćwiczeń) z PODANEGO dnia -
+    czyli usuwa cały zalogowany trening tego dnia na trwałe.
+
+    UWAGA: to NIEODWRACALNE. Appka (w app.py) pyta o hasło administratora
+    PRZED wywołaniem tej funkcji - sama funkcja niczego nie potwierdza i
+    nie pyta, więc ten "bezpiecznik" musi zostać zachowany w warstwie UI.
+
+    Zwraca liczbę usuniętych wierszy (serii) - 0 oznacza, że tego dnia i
+    tak nic nie było zapisane.
+    """
+    with get_connection() as conn:
+        kursor = conn.execute("DELETE FROM workout_sets WHERE date = ?", (date_str,))
+        conn.commit()
+        return kursor.rowcount
 
 
 # ----------------------------------------------------------------------------
