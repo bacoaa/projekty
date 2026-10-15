@@ -396,7 +396,7 @@ def pokaz_stoper_odpoczynku(nonce, sekundy_startowe=SEKUNDY_ODPOCZYNKU):
 # ----------------------------------------------------------------------------
 # 1. KONFIGURACJA STRONY I STYLÓW CSS
 # ----------------------------------------------------------------------------
-st.set_page_config(page_title="Dziennik Operacyjny", page_icon="🎖️", layout="centered")
+st.set_page_config(page_title="Dziennik Kula Mocy", page_icon="🔮", layout="centered")
 
 # ----------------------------------------------------------------------------
 # PALETA KOLORÓW "SKANDYNAWSKA" - jedno miejsce, z którego czerpią WSZYSTKIE
@@ -775,7 +775,7 @@ def go_to_session_summary():
 # --- NOWOŚĆ: nawigacja dla "Dziennika Operacyjnego" (4 kategorie dnia) ------
 def go_to_sub_zdrowie():
     """Podmenu 'Zdrowie, ciało i forma' - tu teraz 'mieszka' Twój dotychczasowy
-    tracker treningów (Twardy test), Historia, Statystyki i Stan licznika."""
+    tracker treningów (Trening Kuli Mocy), Historia, Statystyki i Stan licznika."""
     st.session_state.page = "sub_zdrowie"
     st.query_params.clear()
     st.query_params["page"] = "sub_zdrowie"
@@ -825,7 +825,7 @@ def go_to_stan_licznika():
 
 # --- EKRAN 0: MENU GŁÓWNE - teraz nadrzędny hub "Dziennika Operacyjnego" ---
 if st.session_state.page == "menu":
-    st.title("🎖️ Dziennik Operacyjny")
+    st.title("🔮 Dziennik Kula Mocy")
     st.caption("Fakty, nie opinie.")
     st.write("Wybierz kategorię:")
 
@@ -922,7 +922,7 @@ if st.session_state.page == "menu":
 
 
 # --- EKRAN 0b: PODMENU "ZDROWIE, CIAŁO I FORMA" -----------------------------
-# Tu teraz "mieszka" cały dotychczasowy tracker treningów (Twardy test),
+# Tu teraz "mieszka" cały dotychczasowy tracker treningów (Trening Kuli Mocy),
 # Historia, Statystyki, Stan licznika i Paliwo i silnik - wszystko, co
 # dotyczy ciała i treningu, zebrane w jednym miejscu.
 elif st.session_state.page == "sub_zdrowie":
@@ -935,7 +935,7 @@ elif st.session_state.page == "sub_zdrowie":
     # Niewidoczny znacznik - patrz duży komentarz przy "#puls-marker" w CSS
     # na górze pliku. Musi być TUŻ przed przyciskiem, który ma pulsować.
     st.markdown('<div id="puls-marker"></div>', unsafe_allow_html=True)
-    if st.button("🏋️ Twardy test (nowy trening)", type="primary", key="sub_zdrowie_nowy_trening"):
+    if st.button("🏋️ Trening Kuli Mocy", type="primary", key="sub_zdrowie_nowy_trening"):
         go_to_workout_day_selection()
         st.rerun()
 
@@ -943,7 +943,7 @@ elif st.session_state.page == "sub_zdrowie":
         go_to_history()
         st.rerun()
 
-    if st.button("📈 Super Statystyki", key="sub_zdrowie_stats"):
+    if st.button("💥 Mocne Statystyki", key="sub_zdrowie_stats"):
         go_to_stats()
         st.rerun()
 
@@ -1632,7 +1632,7 @@ elif st.session_state.page == "stats":
         go_to_sub_zdrowie()
         st.rerun()
 
-    st.header("📈 Super Statystyki")
+    st.header("💥 Mocne Statystyki")
 
     # --- 0. HEATMAPA KALENDARZOWA (regularność treningów) -------------------
     st.subheader("📅 Regularność treningów")
