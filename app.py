@@ -55,12 +55,7 @@ HASLO_ADMINA = "22481"
 # TYLKO techniczny klucz kategorii i musimy na jego podstawie odtworzyć
 # tytuł oraz to, dokąd ma wrócić przycisk "Wstecz").
 MAPA_KATEGORII_NOTATEK = {
-    "zadania": ("✅ Robota zrobiona", "menu"),
-    "paliwo_i_silnik": ("⛽ Paliwo i silnik", "sub_zdrowie"),
-    "trzezwe_spojrzenie": ("🧭 Trzeźwe spojrzenie", "sub_rozwoj"),
-    "co_w_trawie_piszczy": ("🌾 Co w trawie piszczy", "sub_rozwoj"),
-    "lekcja_dnia": ("📖 Lekcja dnia", "sub_rozwoj"),
-    "plan_na_jutro": ("🎯 Rozkaz na jutro", "menu"),
+    "paliwo_i_silnik": ("⛽ Paliwo i silnik", "menu"),
 }
 
 # Ile sekund ma domyślnie trwać stoper odpoczynku po zapisaniu serii.
@@ -79,10 +74,31 @@ def pokaz_media_cwiczenia(sciezka):
     - wszystko inne (.jpg, .png, .gif...) -> zwykłe st.image(), tak jak
       do tej pory (gify animują się same, bez żadnego dodatkowego kodu).
 
-    Jeśli plik jeszcze nie istnieje na dysku (nie podmieniłeś placeholdera),
-    appka się nie wywala - po prostu nic nie pokazuje w tym miejscu.
+    Jeśli plik jeszcze nie istnieje na dysku (np. jeszcze nie wgrałeś
+    filmu do repo na GitHubie), appka się NIE wywala - ale (NOWOŚĆ) pokazuje
+    teraz WIDOCZNY, szary placeholder z nazwą brakującego pliku, zamiast
+    po prostu nic nie wyświetlać. Dzięki temu od razu widać, czy appka
+    "nie widzi" pliku (bo np. nazwa się nie zgadza albo plik nie trafił
+    jeszcze na serwer), zamiast zastanawiać się, czy coś jest zepsute.
     """
     if not sciezka or not os.path.exists(sciezka):
+        placeholder_html = f"""
+            <div style="
+                background-color: rgba(150,150,150,0.15);
+                border-radius: 10px;
+                padding: 1.6rem 1rem;
+                text-align: center;
+                margin-bottom: 0.4rem;
+                color: gray;
+                font-size: 0.8rem;">
+                🎬 Brak jeszcze pliku wideo/zdjęcia<br><code>{sciezka}</code>
+            </div>
+            """
+        # _bezpieczny_html_dla_markdown() (zdefiniowana niżej w pliku, ale
+        # dostępna tu w momencie WYWOŁANIA tej funkcji) usuwa puste/wcięte
+        # linie, które inaczej psułyby renderowanie - patrz duży komentarz
+        # przy tej funkcji.
+        st.markdown(_bezpieczny_html_dla_markdown(placeholder_html), unsafe_allow_html=True)
         return
 
     # ".mp4".lower() na końcu ścieżki pliku - sprawdzamy rozszerzenie
@@ -138,75 +154,52 @@ def _bezpieczny_html_dla_markdown(html):
     return "\n".join(linie_oczyszczone)
 
 
-def narysuj_drzewo_passy(liczba_tygodni_passy):
+def narysuj_stos_talerzy(liczba_tygodni_passy):
     """
-    Generuje proste, minimalistyczne drzewo w formacie SVG, którego
-    "korona" (liście) ROŚNIE razem z Twoją aktualną passą treningową
-    (liczbą tygodni z rzędu z min. 1 treningiem).
+    NOWOŚĆ (zastępuje dawne "drzewo passy"): rysuje pionowy STOS TALERZY
+    SIŁOWYCH - rośnie wraz z Twoją aktualną passą treningową (liczbą
+    tygodni z rzędu z min. 1 treningiem).
 
-    Im dłuższa passa, tym WIĘCEJ "kępek liści" dorysowujemy wokół pnia -
-    ograniczamy się do maksymalnie 8 kępek, żeby drzewo nie zrobiło się
-    nieczytelnym "bałaganem" przy naprawdę długich passach (9+ tygodni
-    i tak pokazuje pełną, "dojrzałą" koronę).
+    Zamiast własnoręcznie rysowanej grafiki SVG, używamy tu zwykłego
+    EMOJI 💿 (płyta/talerz) powtórzonego tyle razy, ile tygodni trwa
+    passa - to dużo prostsze niż SVG, a wygląda dokładnie tak, jak
+    prosiłeś: "jak jest seria, to talerze robią stos".
 
-    Zwraca gotowy kawałek kodu HTML (SVG + CSS animacja "wzrostu"), do
-    wstawienia przez st.markdown(..., unsafe_allow_html=True).
+    Ograniczamy się do maksymalnie 8 talerzy na stosie (dłuższa passa i
+    tak pokazuje "pełny", maksymalny stos - inaczej robiłoby się to zbyt
+    długie na ekranie telefonu).
     """
-    # Nie pozwalamy liczbie kępek liści przekroczyć 8 - "sufit" wizualny.
-    liczba_kepek = min(liczba_tygodni_passy, 8)
+    liczba_talerzy = min(liczba_tygodni_passy, 8)
 
-    # Współrzędne (x, y) i promień każdej możliwej kępki liści - ułożone
-    # "od środka korony na zewnątrz", więc kolejne kępki pojawiające się
-    # wraz z rosnącą passą sensownie "dobudowują" koronę drzewa.
-    pozycje_kepek = [
-        (100, 70, 26),   # środek korony - pojawia się jako pierwsza (1 tydzień)
-        (70, 85, 20),
-        (130, 85, 20),
-        (100, 40, 22),
-        (50, 60, 18),
-        (150, 60, 18),
-        (75, 35, 16),
-        (125, 35, 16),
-    ]
-
-    # Budujemy listę znaczników <circle> SVG - po jednym na każdą kępkę,
-    # którą "odblokowała" aktualna passa. Każdy krąg ma lekko inne
-    # opóźnienie animacji (animation-delay), żeby liście "wyrastały" jeden
-    # po drugim, a nie wszystkie naraz - bardziej organiczny efekt.
-    kregi_liasci = ""
-    for i in range(liczba_kepek):
-        x, y, promien = pozycje_kepek[i]
-        opoznienie = i * 0.12
-        kregi_liasci += (
-            f'<circle cx="{x}" cy="{y}" r="{promien}" '
-            f'fill="{KOLOR_AKCENT}" opacity="0.88" '
-            f'style="animation: wyrosnijLisc 0.5s ease-out {opoznienie}s both;" />'
+    if liczba_talerzy == 0:
+        wiersze_talerzy = ""
+        podpis = "➕ Zrób pierwszy trening w tym tygodniu, żeby zacząć stos!"
+    else:
+        # "<br>" między każdym talerzem - dzięki temu każdy 💿 ląduje w
+        # osobnej linii, czyli wizualnie jeden NA drugim (stos), a nie
+        # obok siebie w rządku.
+        wiersze_talerzy = "<br>".join(["💿"] * liczba_talerzy)
+        jednostka = (
+            "tydzień" if liczba_tygodni_passy == 1
+            else "tygodnie" if 2 <= liczba_tygodni_passy <= 4
+            else "tygodni"
         )
+        podpis = f"💿 {liczba_tygodni_passy} {jednostka} z rzędu"
 
     html = f"""
-    <div style="text-align:center; padding: 0.5rem 0 0.8rem 0;">
-        <svg viewBox="0 0 200 180" width="140" height="126" xmlns="http://www.w3.org/2000/svg">
-            <style>
-                @keyframes wyrosnijLisc {{
-                    from {{ opacity: 0; transform: scale(0); transform-origin: center; }}
-                    to   {{ opacity: 0.88; transform: scale(1); transform-origin: center; }}
-                }}
-            </style>
-            <!-- Pień drzewa - zawsze widoczny, niezależnie od długości passy. -->
-            <rect x="92" y="100" width="16" height="70" rx="4" fill="{KOLOR_AKCENT_DRUGI}" />
-            <!-- Korona drzewa - tyle kępek liści, ile tygodni trwa Twoja passa. -->
-            {kregi_liasci}
-        </svg>
-        <div style="color:{KOLOR_TEKST_PRZYGASZONY}; font-size:0.8rem; margin-top:-0.3rem;">
-            {"🌱 Zacznij swoją passę!" if liczba_tygodni_passy == 0 else f"🌳 {liczba_tygodni_passy} {'tydzień' if liczba_tygodni_passy == 1 else 'tygodnie' if 2 <= liczba_tygodni_passy <= 4 else 'tygodni'} z rzędu"}
-        </div>
+    <div style="text-align:center; padding: 0.4rem 0 0.2rem 0; font-size: 2.2rem; line-height: 1.15;">
+        {wiersze_talerzy}
+    </div>
+    <div style="text-align:center; color:{KOLOR_TEKST_PRZYGASZONY}; font-size:0.8rem; margin-top:0.1rem;">
+        {podpis}
     </div>
     """
     # KLUCZOWE: usuwamy puste linie (patrz duży komentarz przy
-    # _bezpieczny_html_dla_markdown wyżej) - szczególnie ważne tutaj, bo gdy
-    # "kregi_liasci" jest puste (passa = 0 tygodni), linia {kregi_liasci}
-    # staje się PUSTĄ linią w środku HTML-a, co bez tego zabezpieczenia
-    # psuje renderowanie WSZYSTKIEGO, co jest po niej.
+    # _bezpieczny_html_dla_markdown wyżej) - ważne tutaj z DOKŁADNIE tego
+    # samego powodu co wcześniej przy drzewie: gdy "wiersze_talerzy" jest
+    # puste (passa = 0), linia {wiersze_talerzy} staje się PUSTĄ linią w
+    # środku HTML-a, co bez tego zabezpieczenia psuje renderowanie
+    # WSZYSTKIEGO, co jest po niej.
     return _bezpieczny_html_dla_markdown(html)
 
 
@@ -628,7 +621,7 @@ if "page" not in st.session_state:
     # Bezpieczna wartość domyślna - gdyby coś dalej nie pasowało.
     st.session_state.page = "menu"
 
-    if zapisana_strona in ("select_day", "history", "stats", "sub_zdrowie", "sub_rozwoj", "stan_licznika"):
+    if zapisana_strona in ("select_day", "history", "stats", "stan_licznika"):
         # Te ekrany nie wymagają żadnych dodatkowych danych do odtworzenia.
         st.session_state.page = zapisana_strona
 
@@ -772,29 +765,14 @@ def go_to_session_summary():
     st.query_params["day"] = st.session_state.current_day_key
 
 
-# --- NOWOŚĆ: nawigacja dla "Dziennika Operacyjnego" (4 kategorie dnia) ------
-def go_to_sub_zdrowie():
-    """Podmenu 'Zdrowie, ciało i forma' - tu teraz 'mieszka' Twój dotychczasowy
-    tracker treningów (Trening Kuli Mocy), Historia, Statystyki i Stan licznika."""
-    st.session_state.page = "sub_zdrowie"
-    st.query_params.clear()
-    st.query_params["page"] = "sub_zdrowie"
-
-
-def go_to_sub_rozwoj():
-    """Podmenu 'Rozwój i przemyślenia' - 3 kategorie luźniejszych notatek."""
-    st.session_state.page = "sub_rozwoj"
-    st.query_params.clear()
-    st.query_params["page"] = "sub_rozwoj"
-
-
 def go_to_notatka(kategoria):
     """
     Przechodzi do UNIWERSALNEGO ekranu notatki tekstowej (patrz EKRAN
-    "notatka" niżej) - jednego, wspólnego dla WSZYSTKICH 6 kategorii
-    prostych notatek, żeby nie pisać 6 prawie identycznych ekranów osobno.
+    "notatka" niżej). Obecnie używana tylko przez kategorię "Paliwo i
+    silnik", ale zostawiamy ten mechanizm ogólny (a nie "zahardkodowany"
+    pod jedną kategorię), gdybyś kiedyś chciał dodać kolejną notatkę.
 
-    Parametr "kategoria" to techniczny klucz zapisu w bazie (np. "zadania")
+    Parametr "kategoria" to techniczny klucz zapisu w bazie (np. "paliwo_i_silnik")
     - ładny tytuł wyświetlany na ekranie oraz to, dokąd ma wracać przycisk
     "Wstecz", odczytujemy z MAPA_KATEGORII_NOTATEK (jedno źródło prawdy na
     górze pliku) zamiast przekazywać je tu za każdym razem osobno - dzięki
@@ -825,31 +803,58 @@ def go_to_stan_licznika():
 
 # --- EKRAN 0: MENU GŁÓWNE - teraz nadrzędny hub "Dziennika Operacyjnego" ---
 if st.session_state.page == "menu":
-    st.title("🔮 Dziennik Kula Mocy")
-    st.caption("Fakty, nie opinie.")
-    st.write("Wybierz kategorię:")
+    # ------------------------------------------------------------------
+    # UWAGA: to, co kiedyś było osobnym podmenu "Zdrowie, ciało i forma",
+    # jest TERAZ całym, jedynym ekranem głównym appki - górne menu z 4
+    # kategoriami (Zadania / Zdrowie / Rozwój / Plan na jutro) zostało
+    # usunięte na życzenie. Dane z usuniętych kategorii (notatki, gdybyś
+    # jednak coś tam wcześniej wpisał) fizycznie ZOSTAJĄ w bazie danych -
+    # po prostu appka już ich nigdzie nie pokazuje.
+    # ------------------------------------------------------------------
+    st.title("💿 Zdrowie, Ciało i Forma Kuli Mocy")
 
-    if st.button("✅ Robota zrobiona", type="primary", key="menu_zadania"):
-        go_to_notatka("zadania")
+    # Niewidoczny znacznik - patrz duży komentarz przy "#puls-marker" w CSS
+    # na górze pliku. Musi być TUŻ przed przyciskiem, który ma pulsować.
+    st.markdown('<div id="puls-marker"></div>', unsafe_allow_html=True)
+    if st.button("🏋️ Trening Kuli Mocy", type="primary", key="menu_nowy_trening"):
+        go_to_workout_day_selection()
         st.rerun()
 
-    if st.button("💪 Zdrowie, ciało i forma", key="menu_zdrowie"):
-        go_to_sub_zdrowie()
+    if st.button("📚 Historia i wykresy", key="menu_historia"):
+        go_to_history()
         st.rerun()
 
-    if st.button("🧠 Rozwój i przemyślenia", key="menu_rozwoj"):
-        go_to_sub_rozwoj()
+    if st.button("💥 Mocne Statystyki", key="menu_stats"):
+        go_to_stats()
         st.rerun()
 
-    if st.button("🎯 Rozkaz na jutro", key="menu_plan"):
-        go_to_notatka("plan_na_jutro")
+    if st.button("📏 Stan licznika (waga, samopoczucie)", key="menu_licznik"):
+        go_to_stan_licznika()
         st.rerun()
+
+    if st.button("⛽ Paliwo i silnik (dieta, trening)", key="menu_paliwo"):
+        go_to_notatka("paliwo_i_silnik")
+        st.rerun()
+
+    # --- Szybkie statystyki --------------------------------------------
+    st.write("")
+    statystyki_menu = pobierz_szybkie_statystyki()
+    if statystyki_menu["liczba_treningow"] > 0:
+        kol_stat1, kol_stat2, kol_stat3 = st.columns(3)
+        kol_stat1.metric("Treningi", statystyki_menu["liczba_treningow"])
+        kol_stat2.metric("Serie", statystyki_menu["liczba_serii"])
+        kol_stat3.metric("Objętość", f"{statystyki_menu['laczna_objetosc']:,.0f} kg")
+
+    # --- NOWOŚĆ: rosnący STOS TALERZY (zastępuje dawne "drzewo passy") -----
+    info_passy_menu = pobierz_info_o_passie()
+    st.markdown(
+        narysuj_stos_talerzy(info_passy_menu["aktualna_passa"]),
+        unsafe_allow_html=True,
+    )
 
     # ------------------------------------------------------------------
-    # NOWOŚĆ: KOPIA ZAPASOWA BAZY DANYCH
+    # KOPIA ZAPASOWA BAZY DANYCH
     # ------------------------------------------------------------------
-    # To zostaje na nadrzędnym Menu (nie w "Zdrowiu"), bo dotyczy CAŁEJ
-    # bazy danych appki (treningów I notatek), a nie tylko jednej kategorii.
     st.write("")
     with st.expander("⚙️ Kopia zapasowa danych"):
         st.caption(
@@ -921,78 +926,6 @@ if st.session_state.page == "menu":
         )
 
 
-# --- EKRAN 0b: PODMENU "ZDROWIE, CIAŁO I FORMA" -----------------------------
-# Tu teraz "mieszka" cały dotychczasowy tracker treningów (Trening Kuli Mocy),
-# Historia, Statystyki, Stan licznika i Paliwo i silnik - wszystko, co
-# dotyczy ciała i treningu, zebrane w jednym miejscu.
-elif st.session_state.page == "sub_zdrowie":
-    if st.button("⬅️ Wróć do Dziennika", key="back_sub_zdrowie"):
-        go_to_menu()
-        st.rerun()
-
-    st.title("💪 Zdrowie, ciało i forma")
-
-    # Niewidoczny znacznik - patrz duży komentarz przy "#puls-marker" w CSS
-    # na górze pliku. Musi być TUŻ przed przyciskiem, który ma pulsować.
-    st.markdown('<div id="puls-marker"></div>', unsafe_allow_html=True)
-    if st.button("🏋️ Trening Kuli Mocy", type="primary", key="sub_zdrowie_nowy_trening"):
-        go_to_workout_day_selection()
-        st.rerun()
-
-    if st.button("📚 Historia i wykresy", key="sub_zdrowie_historia"):
-        go_to_history()
-        st.rerun()
-
-    if st.button("💥 Mocne Statystyki", key="sub_zdrowie_stats"):
-        go_to_stats()
-        st.rerun()
-
-    if st.button("📏 Stan licznika (waga, samopoczucie)", key="sub_zdrowie_licznik"):
-        go_to_stan_licznika()
-        st.rerun()
-
-    if st.button("⛽ Paliwo i silnik (dieta, trening)", key="sub_zdrowie_paliwo"):
-        go_to_notatka("paliwo_i_silnik")
-        st.rerun()
-
-    # --- Szybkie statystyki (przeniesione z dawnego Menu Głównego) --------
-    st.write("")
-    statystyki_zdrowie = pobierz_szybkie_statystyki()
-    if statystyki_zdrowie["liczba_treningow"] > 0:
-        kol_stat1, kol_stat2, kol_stat3 = st.columns(3)
-        kol_stat1.metric("Treningi", statystyki_zdrowie["liczba_treningow"])
-        kol_stat2.metric("Serie", statystyki_zdrowie["liczba_serii"])
-        kol_stat3.metric("Objętość", f"{statystyki_zdrowie['laczna_objetosc']:,.0f} kg")
-
-    # --- Rosnące drzewo passy (też przeniesione) ---------------------------
-    info_passy_zdrowie = pobierz_info_o_passie()
-    st.markdown(
-        narysuj_drzewo_passy(info_passy_zdrowie["aktualna_passa"]),
-        unsafe_allow_html=True,
-    )
-
-
-# --- EKRAN 0c: PODMENU "ROZWÓJ I PRZEMYŚLENIA" ------------------------------
-elif st.session_state.page == "sub_rozwoj":
-    if st.button("⬅️ Wróć do Dziennika", key="back_sub_rozwoj"):
-        go_to_menu()
-        st.rerun()
-
-    st.title("🧠 Rozwój i przemyślenia")
-
-    if st.button("🧭 Trzeźwe spojrzenie", type="primary", key="rozwoj_trzezwe"):
-        go_to_notatka("trzezwe_spojrzenie")
-        st.rerun()
-
-    if st.button("🌾 Co w trawie piszczy", key="rozwoj_trawa"):
-        go_to_notatka("co_w_trawie_piszczy")
-        st.rerun()
-
-    if st.button("📖 Lekcja dnia", key="rozwoj_lekcja"):
-        go_to_notatka("lekcja_dnia")
-        st.rerun()
-
-
 # --- EKRAN 0d: UNIWERSALNY EKRAN NOTATKI -------------------------------------
 # Jeden, wspólny ekran dla WSZYSTKICH 6 prostych kategorii tekstowych
 # (zadania, paliwo i silnik, trzeźwe spojrzenie, co w trawie piszczy,
@@ -1000,15 +933,8 @@ elif st.session_state.page == "sub_rozwoj":
 # ekranów osobno. To, KTÓRA to kategoria i dokąd ma wrócić przycisk
 # "Wstecz", ustawia funkcja go_to_notatka() (patrz wyżej w pliku).
 elif st.session_state.page == "notatka":
-    ekran_powrotu = st.session_state.get("notatka_powrot", "menu")
-
     if st.button("⬅️ Wstecz", key="back_notatka"):
-        if ekran_powrotu == "sub_zdrowie":
-            go_to_sub_zdrowie()
-        elif ekran_powrotu == "sub_rozwoj":
-            go_to_sub_rozwoj()
-        else:
-            go_to_menu()
+        go_to_menu()
         st.rerun()
 
     kategoria_notatki = st.session_state.get("notatka_kategoria", "")
@@ -1039,7 +965,7 @@ elif st.session_state.page == "notatka":
 # --- EKRAN 0e: STAN LICZNIKA (waga ciała + notatka o samopoczuciu) ----------
 elif st.session_state.page == "stan_licznika":
     if st.button("⬅️ Wróć do Zdrowia", key="back_stan_licznika"):
-        go_to_sub_zdrowie()
+        go_to_menu()
         st.rerun()
 
     st.title("📏 Stan licznika")
@@ -1096,7 +1022,7 @@ elif st.session_state.page == "select_day":
 
     if col_top_back.button("⬅️ Wróć do Zdrowia", key="back_to_menu_from_select"):
         st.session_state.editing_plan_key = None
-        go_to_sub_zdrowie()
+        go_to_menu()
         st.rerun()
 
     edit_btn_label = "🔓 Edycja ON" if st.session_state.edit_mode_plans else "🔒 Edycja"
@@ -1213,7 +1139,7 @@ elif st.session_state.page == "exercise_list":
     if not current_day:
         st.error("Nie znaleziono planu treningowego.")
         if st.button("Wróć do menu"):
-            go_to_sub_zdrowie()
+            go_to_menu()
             st.rerun()
     else:
         st.subheader(f"Plan: {current_day['title']}")
@@ -1533,7 +1459,7 @@ elif st.session_state.page == "active_exercise":
 # --- EKRAN 4: HISTORIA I WYKRESY PROGRESU ---
 elif st.session_state.page == "history":
     if st.button("⬅️ Wróć do Zdrowia", key="back_to_menu_from_history"):
-        go_to_sub_zdrowie()
+        go_to_menu()
         st.rerun()
 
     st.header("📚 Historia Treningów")
@@ -1629,7 +1555,7 @@ elif st.session_state.page == "history":
 # --- EKRAN 5: SUPER STATYSTYKI (dashboard analityczny) ---
 elif st.session_state.page == "stats":
     if st.button("⬅️ Wróć do Zdrowia", key="back_to_menu_from_stats"):
-        go_to_sub_zdrowie()
+        go_to_menu()
         st.rerun()
 
     st.header("💥 Mocne Statystyki")
@@ -1802,11 +1728,11 @@ elif st.session_state.page == "session_summary":
         st.write("")
         info_passy_podsum = pobierz_info_o_passie()
         st.markdown(
-            narysuj_drzewo_passy(info_passy_podsum["aktualna_passa"]),
+            narysuj_stos_talerzy(info_passy_podsum["aktualna_passa"]),
             unsafe_allow_html=True,
         )
 
     st.markdown("---")
     if st.button("💪 Wróć do Zdrowia", type="primary", key="summary_to_menu"):
-        go_to_sub_zdrowie()
+        go_to_menu()
         st.rerun()
