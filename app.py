@@ -154,6 +154,42 @@ def _bezpieczny_html_dla_markdown(html):
     return "\n".join(linie_oczyszczone)
 
 
+def icon_talerza_svg(rozmiar=40):
+    """
+    Mała, własnoręcznie narysowana ikona TALERZA SIŁOWEGO (SVG) - ciemne,
+    "żeliwne" koło z cienką jaśniejszą obwódką i otworem na sztangę
+    pośrodku. Zastępuje emoji 💿 (które wyglądało jak płyta CD, a nie
+    jak prawdziwy talerz) - rysujemy to sami, więc wygląda DOKŁADNIE tak,
+    jak chcemy, niezależnie od tego, jak dany telefon renderuje emoji.
+    """
+    return (
+        f'<svg width="{rozmiar}" height="{rozmiar}" viewBox="0 0 100 100" '
+        f'xmlns="http://www.w3.org/2000/svg" style="display:block; margin:0 auto;">'
+        f'<circle cx="50" cy="50" r="46" fill="{KOLOR_TEKST}" />'
+        f'<circle cx="50" cy="50" r="37" fill="none" stroke="{KOLOR_TLO}" stroke-width="2" opacity="0.35" />'
+        f'<circle cx="50" cy="50" r="14" fill="{KOLOR_TLO}" />'
+        f'</svg>'
+    )
+
+
+def icon_hantli_svg(rozmiar=40):
+    """
+    Mała, własnoręcznie narysowana ikona HANTLI (SVG, widok z boku: pręt
+    pośrodku + po jednym talerzu na każdym końcu) - używana jako ikona
+    nagłówka głównego ekranu zamiast emoji.
+    """
+    return (
+        f'<svg width="{rozmiar}" height="{rozmiar}" viewBox="0 0 100 100" '
+        f'xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle; flex-shrink:0;">'
+        f'<rect x="28" y="42" width="44" height="16" rx="4" fill="{KOLOR_TEKST}" />'
+        f'<circle cx="20" cy="50" r="19" fill="{KOLOR_TEKST}" />'
+        f'<circle cx="80" cy="50" r="19" fill="{KOLOR_TEKST}" />'
+        f'<circle cx="20" cy="50" r="7" fill="{KOLOR_TLO}" />'
+        f'<circle cx="80" cy="50" r="7" fill="{KOLOR_TLO}" />'
+        f'</svg>'
+    )
+
+
 def narysuj_stos_talerzy(liczba_tygodni_passy):
     """
     NOWOŚĆ (zastępuje dawne "drzewo passy"): rysuje pionowy STOS TALERZY
@@ -161,9 +197,9 @@ def narysuj_stos_talerzy(liczba_tygodni_passy):
     tygodni z rzędu z min. 1 treningiem).
 
     Zamiast własnoręcznie rysowanej grafiki SVG, używamy tu zwykłego
-    EMOJI 💿 (płyta/talerz) powtórzonego tyle razy, ile tygodni trwa
-    passa - to dużo prostsze niż SVG, a wygląda dokładnie tak, jak
-    prosiłeś: "jak jest seria, to talerze robią stos".
+    własnoręcznie narysowaną ikonę talerza (icon_talerza_svg()) powtórzoną
+    tyle razy, ile tygodni trwa passa - "jak jest seria, to talerze robią
+    stos".
 
     Ograniczamy się do maksymalnie 8 talerzy na stosie (dłuższa passa i
     tak pokazuje "pełny", maksymalny stos - inaczej robiłoby się to zbyt
@@ -175,22 +211,26 @@ def narysuj_stos_talerzy(liczba_tygodni_passy):
         wiersze_talerzy = ""
         podpis = "➕ Zrób pierwszy trening w tym tygodniu, żeby zacząć stos!"
     else:
-        # "<br>" między każdym talerzem - dzięki temu każdy 💿 ląduje w
-        # osobnej linii, czyli wizualnie jeden NA drugim (stos), a nie
-        # obok siebie w rządku.
-        wiersze_talerzy = "<br>".join(["💿"] * liczba_talerzy)
+        # Każda ikona talerza ląduje w osobnej linii (ujemny margines, żeby
+        # talerze lekko "zachodziły" na siebie jak na prawdziwej sztandze),
+        # czyli wizualnie jeden NA drugim - stos, a nie rządek obok siebie.
+        jeden_talerz_html = icon_talerza_svg(44)
+        wiersze_talerzy = "".join(
+            f'<div style="margin-top:{-10 if i > 0 else 0}px;">{jeden_talerz_html}</div>'
+            for i in range(liczba_talerzy)
+        )
         jednostka = (
             "tydzień" if liczba_tygodni_passy == 1
             else "tygodnie" if 2 <= liczba_tygodni_passy <= 4
             else "tygodni"
         )
-        podpis = f"💿 {liczba_tygodni_passy} {jednostka} z rzędu"
+        podpis = f"{liczba_tygodni_passy} {jednostka} z rzędu"
 
     html = f"""
-    <div style="text-align:center; padding: 0.4rem 0 0.2rem 0; font-size: 2.2rem; line-height: 1.15;">
+    <div style="padding: 0.4rem 0 0.2rem 0;">
         {wiersze_talerzy}
     </div>
-    <div style="text-align:center; color:{KOLOR_TEKST_PRZYGASZONY}; font-size:0.8rem; margin-top:0.1rem;">
+    <div style="text-align:center; color:{KOLOR_TEKST_PRZYGASZONY}; font-size:0.8rem; margin-top:0.3rem;">
         {podpis}
     </div>
     """
@@ -811,7 +851,18 @@ if st.session_state.page == "menu":
     # jednak coś tam wcześniej wpisał) fizycznie ZOSTAJĄ w bazie danych -
     # po prostu appka już ich nigdzie nie pokazuje.
     # ------------------------------------------------------------------
-    st.title("💿 Zdrowie, Ciało i Forma Kuli Mocy")
+    # Zamiast st.title() używamy własnego nagłówka HTML - dzięki temu
+    # możemy wstawić obok tekstu własnoręcznie narysowaną ikonę hantli
+    # (icon_hantli_svg()) zamiast emoji. Globalny CSS na górze pliku
+    # stylizuje zwykłe znaczniki <h1> tak samo jak st.title(), więc
+    # wygląd zostaje spójny z resztą appki.
+    naglowek_html = f"""
+    <h1 style="display:flex; align-items:center; gap:0.6rem;">
+        {icon_hantli_svg(40)}
+        <span>Zdrowie, Ciało i Forma Kuli Mocy</span>
+    </h1>
+    """
+    st.markdown(_bezpieczny_html_dla_markdown(naglowek_html), unsafe_allow_html=True)
 
     # Niewidoczny znacznik - patrz duży komentarz przy "#puls-marker" w CSS
     # na górze pliku. Musi być TUŻ przed przyciskiem, który ma pulsować.
